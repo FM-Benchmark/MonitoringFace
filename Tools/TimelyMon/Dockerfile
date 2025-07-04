@@ -7,7 +7,7 @@ ARG GIT_BRANCH=aggregations
 RUN git clone --branch ${GIT_BRANCH} --recurse-submodules ${GIT_REPO} /usr/src/app/timelymon
 
 WORKDIR /usr/src/app/timelymon
-RUN cargo build --release --bin timelymon && cp target/release/timelymon /usr/local/bin/timelymon
+RUN git rev-parse HEAD > VERSION && cargo build --release --bin timelymon && cp target/release/timelymon /usr/local/bin/timelymon
 
 # Use bookworm instead of bullseye for runtime
 FROM debian:bookworm-slim
