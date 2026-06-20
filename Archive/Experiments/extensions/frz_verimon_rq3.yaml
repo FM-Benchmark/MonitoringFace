@@ -3,19 +3,16 @@ experiment_name: frz_verimon
 monitors:
   - identifier: VeriMon
     name: VeriMon-correct
-    branch: freeze
+    branch: master
   - identifier: VeriMon
     name: VeriMon-const-rel
     commit: 76fd7ecdfe9eb3de63a3e1d6cc5815f8b00034ce
-    branch: const-relation-propagation
   - identifier: VeriMon
     name: VeriMon-caching
     commit: 69dcbdb788b879cfb0c9db7b9d153be56dfe3bdb
-    branch: const-relation-propagation
   - identifier: MonPoly
     name: MonPoly-frz
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
-    branch: freeze-native
     params:
       nofilteremptytp: true
 

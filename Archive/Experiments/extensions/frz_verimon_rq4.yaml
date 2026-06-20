@@ -7,7 +7,6 @@ monitors:
   - identifier: MonPoly
     name: MonPoly-frz
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
-    branch: freeze-native
     params:
       nofilteremptytp: true
 
