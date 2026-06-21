@@ -4,14 +4,18 @@ monitors:
   - identifier: VeriMon
     name: VeriMon-correct
     branch: master
+    commit: bc752d37f1d4560b5667eddac9dd1670451b758e
   - identifier: VeriMon
     name: VeriMon-const-rel
-    commit: 76fd7ecdfe9eb3de63a3e1d6cc5815f8b00034ce
+    branch: const-relation-propagation
+    commit: f75212ed94208a12eda6205185ad8dce8bfe744a
   - identifier: VeriMon
     name: VeriMon-caching
-    commit: 69dcbdb788b879cfb0c9db7b9d153be56dfe3bdb
+    branch: const-relation-propagation
+    commit: d6bcab634286da4a70b740bd092fa7049095ac73
   - identifier: MonPoly
     name: MonPoly-frz
+    branch: master
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
     params:
       nofilteremptytp: true
@@ -24,6 +28,11 @@ oracles:
 oracle:
   enabled: true
   name: VeriMonOracle
+
+generation_constraints:
+  guard_type: Oracle
+  guard_name: VeriMonOracle
+  upper_bound: 1800
 
 runtime_constraints:
   upper_bound: 30

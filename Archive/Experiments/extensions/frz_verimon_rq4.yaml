@@ -3,9 +3,11 @@ experiment_name: frz_verimon
 monitors:
   - identifier: VeriMon
     name: VeriMon-correct
-    branch: freeze
+    branch: master
+    commit: bc752d37f1d4560b5667eddac9dd1670451b758e
   - identifier: MonPoly
     name: MonPoly-frz
+    branch: master
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
     params:
       nofilteremptytp: true
@@ -18,6 +20,11 @@ oracles:
 oracle:
   enabled: true
   name: VeriMonOracle
+
+generation_constraints:
+  guard_type: Oracle
+  guard_name: VeriMonOracle
+  upper_bound: 1800
 
 runtime_constraints:
   upper_bound: 30
