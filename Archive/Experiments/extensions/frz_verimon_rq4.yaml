@@ -24,7 +24,7 @@ oracle:
 generation_constraints:
   guard_type: Oracle
   guard_name: VeriMonOracle
-  upper_bound: 1800
+  upper_bound: 3600
 
 runtime_constraints:
   upper_bound: 30
