@@ -5,14 +5,14 @@ monitors:
     name: VeriMon-correct
     branch: master
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
-  - identifier: VeriMon
-    name: VeriMon-const-rel
-    branch: const-relation-propagation
-    commit: f75212ed94208a12eda6205185ad8dce8bfe744a
-  - identifier: VeriMon
-    name: VeriMon-caching
-    branch: const-relation-propagation
-    commit: d6bcab634286da4a70b740bd092fa7049095ac73
+  # - identifier: VeriMon
+  #   name: VeriMon-const-rel
+  #   branch: const-relation-propagation
+  #   commit: f75212ed94208a12eda6205185ad8dce8bfe744a
+  # - identifier: VeriMon
+  #   name: VeriMon-caching
+  #   branch: const-relation-propagation
+  #   commit: d6bcab634286da4a70b740bd092fa7049095ac73
   - identifier: MonPoly
     name: MonPoly-frz
     branch: master
@@ -20,14 +20,15 @@ monitors:
     params:
       nofilteremptytp: true
 
-oracles:
-  - identifier: VeriMonOracle
-    name: VeriMonOracle
-    monitor_name: VeriMon-correct
+# # Uncomment the following lines to enable the oracle
+# oracles:
+#   - identifier: VeriMonOracle
+#     name: VeriMonOracle
+#     monitor_name: VeriMon-correct
 
-oracle:
-  enabled: true
-  name: VeriMonOracle
+# oracle:
+#   enabled: true
+#   name: VeriMonOracle
 
 generation_constraints:
   guard_type: Oracle
@@ -48,17 +49,25 @@ policy_setup:
   ImmediatePolicyContract:
     format: MFOTL
     delimiter: ;
-    frz_simple:         "a(x:int) b(x:int); FRZ q(x) = a(x) IN q(x)"
+    frz_atemporal:        "a(x:int) b(x:int); FRZ q(x) = a(x) IN q(x)"
+    frz_temporal:         "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND ((q(x) AND b(y) AND x > 0) UNTIL[0,5] (a(x) AND b(y)))"
 
 
 synthetic_config:
   data_source: SignatureGenerator
   policy_source: GenFmaGenerator
   experiment:
-    num_data_set_sizes: [1000, 2000, 4000, 8000, 10000]
+    num_operators: [1,2]
+    num_data_set_sizes: [500, 1000, 2000, 4000, 8000, 10000, 20000]
+
+
+seeds:
+  '[1, 0, 0]': [0, 0]
+  '[2, 0, 0]': [0, 1]
+
 
 tools_to_build:
   - VeriMon-correct
-  - VeriMon-const-rel
-  - VeriMon-caching
+  # - VeriMon-const-rel
+  # - VeriMon-caching
   - MonPoly-frz
