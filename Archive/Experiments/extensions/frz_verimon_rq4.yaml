@@ -8,7 +8,7 @@ monitors:
   - identifier: MonPoly
     name: MonPoly-frz
     branch: master
-    commit: bc752d37f1d4560b5667eddac9dd1670451b758e
+    commit: 025a142321e4cd9174164568e38c399ec336a076
     params:
       nofilteremptytp: true
 
@@ -53,14 +53,29 @@ policy_setup:
     rq4_rule14_old:     "a(x:int) b(x:int); a(x) AND ONCE[0,5] ((EVENTUALLY[0,5] a(x)) AND b(y) AND x > 0)"
     rq4_rule15_frz:     "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND EVENTUALLY[0,5] (q(x) AND b(y) AND x > 0)"
     rq4_rule15_old:     "a(x:int) b(x:int); a(x) AND EVENTUALLY[0,5] ((ONCE[0,5] a(x)) AND b(y) AND x > 0)"
-    rq4_rule16_frz:     "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND PAST_ALWAYS[0,5] (q(x) AND b(y) AND x > 0)"
-    rq4_rule16_old:     "a(x:int) b(x:int); a(x) AND PAST_ALWAYS[0,5] ((EVENTUALLY[0,5] a(x)) AND b(y) AND x > 0)"
-    rq4_rule17_frz:     "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND ALWAYS[0,5] (q(x) AND b(y) AND x > 0)"
-    rq4_rule17_old:     "a(x:int) b(x:int); a(x) AND ALWAYS[0,5] ((ONCE[0,5] a(x)) AND b(y) AND x > 0)"
+    # PAST_ALWAYS[0,5] beta rewritten monitorably (beta = a(x) AND b(y) AND x > 0):
+    #   frz  = FRZ q = beta IN q AND NOT ONCE[0,5] (q AND NOT beta)
+    #   old  = beta AND NOT ONCE[0,5] ((EVENTUALLY[0,5] beta) AND NOT beta)
+    # Both verified equivalent to PAST_ALWAYS[0,5] beta against VeriMon.
+    rq4_rule16_frz:     "a(x:int) b(x:int); FRZ q(x,y) = (a(x) AND b(y) AND x > 0) IN q(x,y) AND NOT ONCE[0,5] (q(x,y) AND NOT (a(x) AND b(y) AND x > 0))"
+    rq4_rule16_old:     "a(x:int) b(x:int); (a(x) AND b(y) AND x > 0) AND NOT ONCE[0,5] ((EVENTUALLY[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y) AND x > 0))"
+    # ALWAYS[0,5] beta = future dual (ONCE <-> EVENTUALLY).
+    rq4_rule17_frz:     "a(x:int) b(x:int); FRZ q(x,y) = (a(x) AND b(y) AND x > 0) IN q(x,y) AND NOT EVENTUALLY[0,5] (q(x,y) AND NOT (a(x) AND b(y) AND x > 0))"
+    rq4_rule17_old:     "a(x:int) b(x:int); (a(x) AND b(y) AND x > 0) AND NOT EVENTUALLY[0,5] ((ONCE[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y) AND x > 0))"
     rq4_rule18_frz:     "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND PREVIOUS[0,5] (q(x) AND b(y) AND x > 0)"
     rq4_rule18_old:     "a(x:int) b(x:int); a(x) AND PREVIOUS[0,5] ((NEXT[0,5] a(x)) AND b(y) AND x > 0)"
     rq4_rule19_frz:     "a(x:int) b(x:int); FRZ q(x) = a(x) IN a(x) AND NEXT[0,5] (q(x) AND b(y) AND x > 0)"
     rq4_rule19_old:     "a(x:int) b(x:int); a(x) AND NEXT[0,5] ((PREVIOUS[0,5] a(x)) AND b(y) AND x > 0)"
+    # alpha TRIGGER[0,5] beta = NOT ((NOT alpha) SINCE[0,5] (NOT beta)), rewritten
+    # monitorably (alpha = a(x) AND b(y), beta = a(x) AND b(y) AND x > 0):
+    #   frz  = FRZ q = beta IN q AND NOT ((q AND NOT alpha) SINCE[0,5] (q AND NOT beta))
+    #   old  = beta AND NOT (((EV beta) AND NOT alpha) SINCE[0,5] ((EV beta) AND NOT beta))
+    # Both verified equivalent to (alpha TRIGGER[0,5] beta) against VeriMon.
+#    rq4_rule20_frz:     "a(x:int) b(x:int); FRZ q(x,y) = (a(x) AND b(y) AND x > 0) IN q(x,y) AND NOT ((q(x,y) AND NOT (a(x) AND b(y))) SINCE[0,5] (q(x,y) AND NOT (a(x) AND b(y) AND x > 0)))"
+#    rq4_rule20_old:     "a(x:int) b(x:int); (a(x) AND b(y) AND x > 0) AND NOT (((EVENTUALLY[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y))) SINCE[0,5] ((EVENTUALLY[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y) AND x > 0)))"
+    # alpha RELEASE[0,5] beta = future dual of TRIGGER (SINCE -> UNTIL, EV -> ONCE).
+#    rq4_rule21_frz:     "a(x:int) b(x:int); FRZ q(x,y) = (a(x) AND b(y) AND x > 0) IN q(x,y) AND NOT ((q(x,y) AND NOT (a(x) AND b(y))) UNTIL[0,5] (q(x,y) AND NOT (a(x) AND b(y) AND x > 0)))"
+#    rq4_rule21_old:     "a(x:int) b(x:int); (a(x) AND b(y) AND x > 0) AND NOT (((ONCE[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y))) UNTIL[0,5] ((ONCE[0,5] (a(x) AND b(y) AND x > 0)) AND NOT (a(x) AND b(y) AND x > 0)))"
 
 
 
@@ -68,7 +83,7 @@ synthetic_config:
   data_source: SignatureGenerator
   policy_source: GenFmaGenerator
   experiment:
-    num_operators: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+    num_operators: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]#,21,22,23,24]
     num_data_set_sizes: [5000]
 
 seeds:
@@ -92,6 +107,10 @@ seeds:
   '[18, 0, 0]': [0, 17]
   '[19, 0, 0]': [0, 18]
   '[20, 0, 0]': [0, 19]
+  '[21, 0, 0]': [0, 20]
+  '[22, 0, 0]': [0, 21]
+  '[23, 0, 0]': [0, 22]
+  '[24, 0, 0]': [0, 23]
 
 
 tools_to_build:
