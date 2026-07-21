@@ -1,5 +1,6 @@
 import importlib
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from omegaconf import OmegaConf, DictConfig
@@ -369,12 +370,21 @@ class YamlParser:
             policy_contract_name = policy_setup.__class__.__name__.replace('Contract', 'Generator')
             policy_generator = self._parse_policy_generators(self.path_to_project, policy_contract_name)
 
+            synthetic_experiment = self.parse_synthetic_experiment()
+            seeds = self.parse_seeds()
+            if seeds:
+                settings_len = (max(1, len(synthetic_experiment.num_setting)) * max(1, len(synthetic_experiment.num_data_set_sizes))
+                 * max(1, len(synthetic_experiment.num_operators)) * max(1, len(synthetic_experiment.num_fvs)))
+                print("    -> Seeds length: ", len(seeds), " | Experiment settings length: ", settings_len)
+                if settings_len != len(seeds):
+                    raise YamlParserException(f"Seeds length {len(seeds)} does not match the number of experiment settings {settings_len}")
+
             coordinator = SyntheticDataCoordinator(
-                experiment=self.parse_synthetic_experiment(), data_setup=data_setup,
+                experiment=synthetic_experiment, data_setup=data_setup,
                 data_source=data_generator, policy_setup=policy_setup,
                 policy_source=policy_generator, oracle=oracle,
                 constraints=constraints, path_manager=self.path_manager,
-                seeds=self.parse_seeds(), runtime_settings=runtime_settings,
+                seeds=seeds, runtime_settings=runtime_settings,
                 online_settings=online_experiments_settings
             )
         return coordinator, monitor_manager, self.get_tools_to_build(), self.get_repeat_experiments()
