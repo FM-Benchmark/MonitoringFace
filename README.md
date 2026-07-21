@@ -13,10 +13,6 @@ installation and versioning via Docker, imposes no restriction on a monitor's in
 or output format, and makes performance measurements and correctness checks
 reproducible across machines.
 
-> This repository accompanies the paper *MonitoringFace: A Portable Platform for
-> Runtime Monitoring* (Reese, Hublet, Krstić, Traytel). The configuration files
-> used for the paper's use cases live under [`Archive/Experiments/benchmark_paper/`](Archive/Experiments/benchmark_paper).
-
 ## Architecture
 
 MonitoringFace is structured around **two modules**:

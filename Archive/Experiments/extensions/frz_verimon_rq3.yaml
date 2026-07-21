@@ -3,30 +3,37 @@ experiment_name: frz_verimon
 monitors:
   - identifier: VeriMon
     name: VeriMon-correct
-    branch: freeze
-  - identifier: VeriMon
-    name: VeriMon-const-rel
-    commit: 76fd7ecdfe9eb3de63a3e1d6cc5815f8b00034ce
-    branch: const-relation-propagation
-  - identifier: VeriMon
-    name: VeriMon-caching
-    commit: 69dcbdb788b879cfb0c9db7b9d153be56dfe3bdb
-    branch: const-relation-propagation
-  - identifier: MonPoly
-    name: MonPoly-frz
+    branch: master
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
-    branch: freeze-native
+  # - identifier: VeriMon
+  #   name: VeriMon-const-rel
+  #   branch: const-relation-propagation
+  #   commit: f75212ed94208a12eda6205185ad8dce8bfe744a
+  # - identifier: VeriMon
+  #   name: VeriMon-caching
+  #   branch: const-relation-propagation
+  #   commit: d6bcab634286da4a70b740bd092fa7049095ac73
+  # - identifier: MonPoly
+    name: MonPoly-frz
+    branch: master
+    commit: bc752d37f1d4560b5667eddac9dd1670451b758e
     params:
       nofilteremptytp: true
 
-oracles:
-  - identifier: VeriMonOracle
-    name: VeriMonOracle
-    monitor_name: VeriMon-correct
+# # Uncomment the following lines to enable the oracle
+# oracles:
+#   - identifier: VeriMonOracle
+#     name: VeriMonOracle
+#     monitor_name: VeriMon-correct
 
-oracle:
-  enabled: true
-  name: VeriMonOracle
+# oracle:
+#   enabled: true
+#   name: VeriMonOracle
+
+generation_constraints:
+  guard_type: Oracle
+  guard_name: VeriMonOracle
+  upper_bound: 1800
 
 runtime_constraints:
   upper_bound: 30
@@ -56,7 +63,7 @@ synthetic_config:
   policy_source: GenFmaGenerator
   experiment:
     num_operators: [1,2,3,4,5,6]
-    num_data_set_sizes: [100, 200, 500, 1000, 2000]
+    num_data_set_sizes: [100, 200, 500, 1000, 2000, 4000, 8000, 10000, 20000, 40000, 80000, 100000]
 
 seeds:
   '[1, 0, 0]': [0, 0]
@@ -69,6 +76,6 @@ seeds:
 
 tools_to_build:
   - VeriMon-correct
-  - VeriMon-const-rel
-  - VeriMon-caching
+  # - VeriMon-const-rel
+  # - VeriMon-caching
   - MonPoly-frz
