@@ -40,6 +40,8 @@ def str_to_trace_inout_format(format_str: str) -> InputOutputTraceFormats:
 def trace_inout_format_to_str(format_enum: InputOutputTraceFormats) -> str:
     if format_enum == InputOutputTraceFormats.CSV:
         return "csv"
+    elif format_enum == InputOutputTraceFormats.OOO_CSV:
+        return "ooo-csv"
     elif format_enum == InputOutputTraceFormats.CSV_LINEAR:
         return "csv-linear"
     elif format_enum == InputOutputTraceFormats.MONPOLY_LINEAR:
