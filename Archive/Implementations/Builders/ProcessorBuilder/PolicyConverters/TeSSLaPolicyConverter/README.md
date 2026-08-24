@@ -1,4 +1,4 @@
-# TeSSLaPolicyConverter (phase 0 + phase-1 valuation verdicts)
+# TeSSLaPolicyConverter (phases 0-2: past fragment, valuation verdicts, bounded-future roots)
 
 In-process compiler from MonPoly-syntax MFOTL to a self-contained TeSSLa
 specification (`srv-policy`), making TeSSLa reachable from the MFOTL
@@ -48,9 +48,32 @@ with negated left-hand side), under MonPoly-style safety. A top-level
 `NOT (...)` is treated as the NEGATED_MFOTL convention: the inner formula's
 closure is monitored and the boolean verdict inverted.
 
-Not yet: bounded/lower-bounded intervals, bounded future, aggregations,
-MFODL regex, `let`/`rec`, string data (TeSSLa prints strings unquoted, so
-string verdicts cannot be re-parsed reliably).
+Phase 2 adds ONE bounded-future operator at the root, optionally under
+existential quantifiers, over past-only operands: `NEXT_I` (any interval),
+`EVENTUALLY_I` and `UNTIL_I` (finite upper bound; also with a negated
+left-hand side). Verdicts for timepoint i become known later; the generated
+spec keeps an owed-obligation register and emits them at the closing
+timepoint as tagged tuples on `mf_late_set` (elements `List(tp, cols...)`),
+plus a finite-trace flush on the `mf_eof` sentinel that the trace converter
+appends one tick after the last timepoint, matching MonPoly's semantics at
+the end of an offline log. The wrapper re-keys tagged verdicts by timepoint
+into `OooVerdicts` (open roots) or a `PropositionList` (closed roots).
+Future operators anywhere below the root are a hard error: that would need
+per-operator out-of-order buffering (TimelyMon's problem) and stays out of
+scope. Two further gates mirror the MonPoly oracle exactly: negative or
+empty intervals are rejected (MonPoly's check_wff does too, where we would
+otherwise compile a silently never-true monitor), and upper-unbounded NEXT
+is allowed only over operands that are empty on an empty database, because
+MonPoly evaluates the last timepoint's NEXT against a virtual empty
+timepoint at timestamp infinity (probed empirically; the reference
+evaluator models that virtual timepoint exactly). Note for hand-written
+srv setups: converter traces end with the mf_eof sentinel, so a native spec
+run with reject_undeclared: True on a converter trace will error at the
+sentinel; native specs should either declare mf_eof or not opt into -r.
+
+Not yet: bounded/lower-bounded PAST intervals, future operators nested under
+other operators, aggregations, MFODL regex, `let`/`rec`, string data (TeSSLa
+prints strings unquoted, so string verdicts cannot be re-parsed reliably).
 
 Polarity is keyed on the SOURCE FORMAT, not on syntax: NEGATED_MFOTL input
 (`NOT (phi)` from the negation plumbing) strips the wrapper and monitors phi

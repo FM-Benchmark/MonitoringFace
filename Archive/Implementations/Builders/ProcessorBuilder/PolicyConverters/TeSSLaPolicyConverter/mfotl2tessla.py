@@ -95,15 +95,17 @@ class Exists(Formula):
 
 
 class Interval:
-    def __init__(self, low: int, high: Optional[int]):
+    def __init__(self, low: int, high: Optional[int], high_exclusive: bool = True):
         self.low = low
         self.high = high  # None = unbounded (*)
+        self.high_exclusive = high_exclusive
 
     def is_zero_unbounded(self) -> bool:
         return self.low == 0 and self.high is None
 
     def __repr__(self):
-        return f"[{self.low},{'*' if self.high is None else self.high})"
+        close = ")" if self.high_exclusive else "]"
+        return f"[{self.low},{'*' if self.high is None else self.high}{close}"
 
 
 class Prev(Formula):
@@ -125,6 +127,28 @@ class Since(Formula):
         self.right = right
 
 
+class Next(Formula):
+    def __init__(self, interval: Interval, sub: Formula):
+        self.interval = interval
+        self.sub = sub
+
+
+class Eventually(Formula):
+    def __init__(self, interval: Interval, sub: Formula):
+        self.interval = interval
+        self.sub = sub
+
+
+class Until(Formula):
+    def __init__(self, interval: Interval, left: Formula, right: Formula):
+        self.interval = interval
+        self.left = left
+        self.right = right
+
+
+FUTURE_NODES = (Next, Eventually, Until)
+
+
 # --- Tokenizer / parser ------------------------------------------------------
 
 _TOKEN_RE = re.compile(
@@ -144,7 +168,7 @@ _KEYWORDS = {
 }
 
 # Parsed so the rejection message can name them instead of failing mid-parse.
-_FUTURE_OR_UNSUPPORTED_UNARY = {"NEXT", "EVENTUALLY", "ALWAYS", "HISTORICALLY"}
+_UNSUPPORTED_UNARY = {"ALWAYS", "HISTORICALLY"}
 
 
 def _tokenize(text: str) -> List[Tuple[str, str]]:
@@ -204,12 +228,13 @@ class _Parser:
             right = self.parse_or()
             return Since(interval, left, right)
         if self.at_keyword("UNTIL"):
-            raise UnsupportedFragmentError(
-                "UNTIL is a future operator; phase 0 supports the past-only fragment"
-            )
+            self.next()
+            interval = self.parse_interval()
+            right = self.parse_or()
+            return Until(interval, left, right)
         if self.at_keyword("IMPLIES"):
             raise UnsupportedFragmentError(
-                "IMPLIES is not in the phase-0 fragment (rewrite as NOT/OR)"
+                "IMPLIES is not in the supported fragment (rewrite as NOT/OR)"
             )
         return left
 
@@ -241,7 +266,17 @@ class _Parser:
         closing = self.next()
         if closing[0] not in ("rbrack", "rparen"):
             raise PolicyParseError(f"Expected interval close, found {closing[1]!r}")
-        return Interval(low, high)
+        interval = Interval(low, high, high_exclusive=(closing[0] == "rparen"))
+        if low < 0 or (
+            high is not None
+            and (low > high or (low == high and interval.high_exclusive))
+        ):
+            # MonPoly rejects these at check_wff; compiling them would yield a
+            # silently never-true monitor.
+            raise UnsupportedFragmentError(
+                f"Negative or empty interval {interval}"
+            )
+        return interval
 
     def parse_unary(self) -> Formula:
         tok = self.peek()
@@ -273,9 +308,17 @@ class _Parser:
                 self.next()
                 interval = self.parse_interval()
                 return Once(interval, self.parse_unary())
-            if value in _FUTURE_OR_UNSUPPORTED_UNARY:
+            if value == "NEXT":
+                self.next()
+                interval = self.parse_interval()
+                return Next(interval, self.parse_unary())
+            if value == "EVENTUALLY":
+                self.next()
+                interval = self.parse_interval()
+                return Eventually(interval, self.parse_unary())
+            if value in _UNSUPPORTED_UNARY:
                 raise UnsupportedFragmentError(
-                    f"{value} is not in the phase-0 fragment (past-only, [0,*))"
+                    f"{value} is not in the supported fragment"
                 )
             if value in ("TRUE", "FALSE"):
                 raise UnsupportedFragmentError(
@@ -392,11 +435,11 @@ def _fv(formula: Formula) -> set:
         return {t.name for t in (formula.left, formula.right) if isinstance(t, Var)}
     if isinstance(formula, Not):
         return _fv(formula.sub)
-    if isinstance(formula, (And, Or, Since)):
+    if isinstance(formula, (And, Or, Since, Until)):
         return _fv(formula.left) | _fv(formula.right)
     if isinstance(formula, Exists):
         return _fv(formula.sub) - set(formula.variables)
-    if isinstance(formula, (Prev, Once)):
+    if isinstance(formula, (Prev, Once, Next, Eventually)):
         return _fv(formula.sub)
     raise UnsupportedFragmentError(f"Unknown formula node {type(formula).__name__}")
 
@@ -408,12 +451,38 @@ def _require_zero_unbounded(interval: Interval, operator: str):
         )
 
 
+def _empty_on_empty_db(formula: Formula) -> bool:
+    """True if the formula provably denotes the empty relation on an empty
+    database (pure positive predicate/join structure).  Used to gate
+    upper-unbounded NEXT: MonPoly evaluates the last timepoint's NEXT against
+    a virtual empty timepoint at timestamp infinity, which coincides with our
+    no-emission behavior exactly when the operand is empty there."""
+    if isinstance(formula, Pred):
+        return True
+    if isinstance(formula, And):
+        return _empty_on_empty_db(formula.left) or _empty_on_empty_db(formula.right)
+    if isinstance(formula, Or):
+        return _empty_on_empty_db(formula.left) and _empty_on_empty_db(formula.right)
+    if isinstance(formula, Exists):
+        return _empty_on_empty_db(formula.sub)
+    return False  # Not / Eq / temporal operators can be nonempty on an empty db
+
+
 def check_safety(formula: Formula):
-    """Reject formulas outside the finitely-evaluable phase-0 fragment.
+    """Reject formulas outside the finitely-evaluable past fragment.
 
     Mirrors the relevant part of MonPoly's monitorable fragment: every
     compiled subformula must denote a finite relation at each timepoint.
+    Future operators are handled separately at the root (phase 2) and are
+    rejected here, i.e. anywhere below the root position.
     """
+    if isinstance(formula, FUTURE_NODES):
+        raise UnsupportedFragmentError(
+            f"{type(formula).__name__.upper()} is supported only as the root "
+            f"operator (optionally under EXISTS), over past-only operands; "
+            f"nesting future operators under other operators is out of the "
+            f"phase-2 fragment"
+        )
     if isinstance(formula, Pred):
         return
     if isinstance(formula, Eq):
@@ -500,6 +569,23 @@ def check_safety(formula: Formula):
 SET_T = "Set[List[Int]]"
 EV_SET_T = f"Events[{SET_T}]"
 EMPTY_SET = "Set.empty[List[Int]]"
+
+
+def _window_cond(interval: Interval, delta: str) -> str:
+    """Condition: the timestamp difference `delta` lies inside the interval."""
+    parts = [f"{delta} >= {interval.low}"]
+    if interval.high is not None:
+        op = "<" if interval.high_exclusive else "<="
+        parts.append(f"{delta} {op} {interval.high}")
+    return " && ".join(parts)
+
+
+def _closed_cond(interval: Interval, delta: str) -> str:
+    """Condition: no current or future timestamp can still fall inside the
+    interval (timestamps are non-strictly monotone, so equality keeps a
+    window open for an inclusive bound)."""
+    op = ">=" if interval.high_exclusive else ">"
+    return f"{delta} {op} {interval.high}"
 
 
 def _list_expr(elements: List[str]) -> str:
@@ -752,6 +838,146 @@ class _CodeGen:
         self.emit(name, body)
         return name, beta_cols
 
+    # --- Phase 2: bounded-future root operators -----------------------------
+    # Verdicts for timepoint i become known at the later timepoint that closes
+    # i's window; they are emitted there as tagged tuples [i, cols...] on one
+    # late-output stream and re-keyed by the wrapper (OooVerdicts).  Pending
+    # windows at end of trace are never emitted, matching MonPoly.
+
+    def compile_future_root(self, formula: Formula) -> Tuple[str, List[str]]:
+        """Returns (late-output stream, value columns); emitted set elements
+        are [tag_timepoint] + value columns."""
+        self.lines.append("def mf_tp: Events[Int] = time(mf_ts)")
+        if isinstance(formula, Next):
+            return self.compile_next_root(formula)
+        if isinstance(formula, Eventually):
+            return self.compile_eventually_root(formula)
+        return self.compile_until_root(formula)
+
+    def compile_next_root(self, formula: Next) -> Tuple[str, List[str]]:
+        sub_name, sub_cols = self.compile(formula.sub)
+        window = _window_cond(formula.interval, "(tau - ptau)")
+        self.lines.append(
+            "def mf_fr_ptp: Events[Int] = merge(last(mf_tp, mf_ts), const(-1, mf_ts))"
+        )
+        self.lines.append(
+            "def mf_fr_pts: Events[Int] = merge(last(mf_ts, mf_ts), const(-1, mf_ts))"
+        )
+        self.lines.append(
+            f"def mf_fr: {EV_SET_T} = slift5({sub_name}, mf_ts, mf_tp, mf_fr_ptp, mf_fr_pts, "
+            f"(phi: {SET_T}, tau: Int, j: Int, pj: Int, ptau: Int) => "
+            f"if pj >= 0 && ({window}) "
+            f"then Set.fold(phi, {EMPTY_SET}, (nacc: {SET_T}, v: List[Int]) => "
+            f"Set.add(nacc, List.prepend(pj, v))) else {EMPTY_SET})"
+        )
+        return "mf_fr", sub_cols
+
+    def compile_eventually_root(self, formula: Eventually) -> Tuple[str, List[str]]:
+        sub_name, sub_cols = self.compile(formula.sub)
+        window = _window_cond(formula.interval, "(tau - List.get(e, 1))")
+        closes = _closed_cond(formula.interval, "(tau - List.get(e2, 1))")
+        t3 = f"({SET_T}, {SET_T}, {SET_T})"
+        self.lines.append(
+            f"def mf_fr_prev: Events[{t3}] = merge(last(mf_fr_st, mf_ts), "
+            f"const(({EMPTY_SET}, {EMPTY_SET}, {EMPTY_SET}), mf_ts))"
+        )
+        self.lines.append(
+            f"def mf_fr_st: Events[{t3}] = slift4(mf_fr_prev, {sub_name}, mf_ts, mf_tp, "
+            f"(pv: {t3}, phi: {SET_T}, tau: Int, j: Int) => {{\n"
+            f"  def pp: {SET_T} = Set.add(pv._1, {_list_expr(['j', 'tau'])})\n"
+            f"  def h1: {SET_T} = Set.fold(pp, pv._2, (hacc: {SET_T}, e: List[Int]) =>\n"
+            f"    if {window} then Set.fold(phi, hacc, (hacc2: {SET_T}, v: List[Int]) =>\n"
+            f"      Set.add(hacc2, List.prepend(List.get(e, 0), v))) else hacc)\n"
+            f"  def closedt: {SET_T} = Set.fold(pp, {EMPTY_SET}, (cacc: {SET_T}, e2: List[Int]) =>\n"
+            f"    if {closes} then Set.add(cacc, {_list_expr(['List.get(e2, 0)'])}) else cacc)\n"
+            f"  def emitset: {SET_T} = Set.fold(h1, {EMPTY_SET}, (eacc: {SET_T}, e3: List[Int]) =>\n"
+            f"    if Set.contains(closedt, {_list_expr(['List.get(e3, 0)'])}) then Set.add(eacc, e3) else eacc)\n"
+            f"  def pnew: {SET_T} = Set.fold(pp, {EMPTY_SET}, (pacc: {SET_T}, e4: List[Int]) =>\n"
+            f"    if Set.contains(closedt, {_list_expr(['List.get(e4, 0)'])}) then pacc else Set.add(pacc, e4))\n"
+            f"  (pnew, Set.minus(h1, emitset), emitset)\n"
+            f"}})"
+        )
+        self.lines.append(
+            f"def mf_fr: {EV_SET_T} = slift1(mf_fr_st, (t: {t3}) => t._3)"
+        )
+        # End-of-trace flush: the residual hits are exactly the finite-trace
+        # verdicts of the still-open windows (matching MonPoly at log end).
+        self.lines.append(
+            f"def mf_fr_flush: {EV_SET_T} = slift1(last(mf_fr_st, mf_eof), "
+            f"(t: {t3}) => t._2)"
+        )
+        self.lines.append(f"def mf_frf: {EV_SET_T} = merge(mf_fr, mf_fr_flush)")
+        return "mf_frf", sub_cols
+
+    def compile_until_root(self, formula: Until) -> Tuple[str, List[str]]:
+        alpha = formula.left
+        negated = isinstance(alpha, Not) and bool(_fv(alpha.sub))
+        alpha_pos = alpha.sub if negated else alpha
+        alpha_name, alpha_cols = self.compile(alpha_pos)
+        beta_name, beta_cols = self.compile(formula.right)
+        projection = _tuple_from("v", [beta_cols.index(c) for c in alpha_cols])
+        window = _window_cond(formula.interval, "(tau - List.get(e, 1))")
+        closes = _closed_cond(formula.interval, "(tau - List.get(e2, 1))")
+        t4 = f"({SET_T}, {SET_T}, {SET_T}, {SET_T})"
+        # The alive register A holds [i]+u tuples: for positive alpha, u held
+        # at every k in [i, j); for negated alpha it holds killed tuples (u
+        # seen in gamma at some k in [i, j)).  Contributions at j use the
+        # PRE-update A, i.e. alpha over [i, j) exactly; i == j is vacuous.
+        if negated:
+            check = (
+                f"!Set.contains(pv._2, List.prepend(List.get(e, 0), {projection}))"
+            )
+            a_update = (
+                f"  def a1: {SET_T} = Set.fold(pp, pv._2, (aacc: {SET_T}, ep: List[Int]) =>\n"
+                f"    Set.fold(al, aacc, (aacc2: {SET_T}, u: List[Int]) =>\n"
+                f"      Set.add(aacc2, List.prepend(List.get(ep, 0), u))))\n"
+            )
+        else:
+            check = (
+                f"Set.contains(pv._2, List.prepend(List.get(e, 0), {projection}))"
+            )
+            a_update = (
+                f"  def akept: {SET_T} = Set.fold(pv._2, {EMPTY_SET}, (aacc: {SET_T}, ea: List[Int]) =>\n"
+                f"    if Set.contains(al, List.tail(ea)) then Set.add(aacc, ea) else aacc)\n"
+                f"  def a1: {SET_T} = Set.fold(al, akept, (aacc2: {SET_T}, u: List[Int]) =>\n"
+                f"    Set.add(aacc2, List.prepend(j, u)))\n"
+            )
+        self.lines.append(
+            f"def mf_fr_prev: Events[{t4}] = merge(last(mf_fr_st, mf_ts), "
+            f"const(({EMPTY_SET}, {EMPTY_SET}, {EMPTY_SET}, {EMPTY_SET}), mf_ts))"
+        )
+        self.lines.append(
+            f"def mf_fr_st: Events[{t4}] = slift5(mf_fr_prev, {alpha_name}, {beta_name}, mf_ts, mf_tp, "
+            f"(pv: {t4}, al: {SET_T}, be: {SET_T}, tau: Int, j: Int) => {{\n"
+            f"  def pp: {SET_T} = Set.add(pv._1, {_list_expr(['j', 'tau'])})\n"
+            f"  def h1: {SET_T} = Set.fold(pp, pv._3, (hacc: {SET_T}, e: List[Int]) =>\n"
+            f"    if {window} then Set.fold(be, hacc, (hacc2: {SET_T}, v: List[Int]) =>\n"
+            f"      if List.get(e, 0) == j || ({check}) "
+            f"then Set.add(hacc2, List.prepend(List.get(e, 0), v)) else hacc2) else hacc)\n"
+            f"{a_update}"
+            f"  def closedt: {SET_T} = Set.fold(pp, {EMPTY_SET}, (cacc: {SET_T}, e2: List[Int]) =>\n"
+            f"    if {closes} then Set.add(cacc, {_list_expr(['List.get(e2, 0)'])}) else cacc)\n"
+            f"  def emitset: {SET_T} = Set.fold(h1, {EMPTY_SET}, (eacc: {SET_T}, e3: List[Int]) =>\n"
+            f"    if Set.contains(closedt, {_list_expr(['List.get(e3, 0)'])}) then Set.add(eacc, e3) else eacc)\n"
+            f"  def pnew: {SET_T} = Set.fold(pp, {EMPTY_SET}, (pacc: {SET_T}, e4: List[Int]) =>\n"
+            f"    if Set.contains(closedt, {_list_expr(['List.get(e4, 0)'])}) then pacc else Set.add(pacc, e4))\n"
+            f"  def anew: {SET_T} = Set.fold(a1, {EMPTY_SET}, (kacc: {SET_T}, e5: List[Int]) =>\n"
+            f"    if Set.contains(closedt, {_list_expr(['List.get(e5, 0)'])}) then kacc else Set.add(kacc, e5))\n"
+            f"  (pnew, anew, Set.minus(h1, emitset), emitset)\n"
+            f"}})"
+        )
+        self.lines.append(
+            f"def mf_fr: {EV_SET_T} = slift1(mf_fr_st, (t: {t4}) => t._4)"
+        )
+        # End-of-trace flush: residual hits = finite-trace verdicts of the
+        # still-open windows (matching MonPoly at log end).
+        self.lines.append(
+            f"def mf_fr_flush: {EV_SET_T} = slift1(last(mf_fr_st, mf_eof), "
+            f"(t: {t4}) => t._3)"
+        )
+        self.lines.append(f"def mf_frf: {EV_SET_T} = merge(mf_fr, mf_fr_flush)")
+        return "mf_frf", beta_cols
+
 
 def compile_policy(
     policy_text: str,
@@ -786,21 +1012,31 @@ def compile_policy(
             "(MonPoly rejects it too); route the negated-policy convention "
             "through the NEGATED_MFOTL format instead"
         )
-    check_safety(formula)
     arities = parse_signature(signature_text)
-
-    gen = _CodeGen(arities)
-    root_name, root_cols = gen.compile(formula)
-
     header = [
-        "-- Generated by MonitoringFace TeSSLaPolicyConverter (phase 0).",
+        "-- Generated by MonitoringFace TeSSLaPolicyConverter.",
         "-- Encoding: TeSSLa time = timepoint index; mf_ts carries timestamps;",
         "-- one Set[List[Int]] event per predicate per timepoint.",
         "in mf_ts: Events[Int]",
+        "in mf_eof: Events[Unit]",
     ]
     for predicate in sorted(arities):
         header.append(f"in mf_p_{predicate}: {EV_SET_T}")
     header.append(f"def mf_tick: {EV_SET_T} = const({EMPTY_SET}, mf_ts)")
+    gen = _CodeGen(arities)
+
+    # Phase 2: a bounded-future operator may stand at the root, optionally
+    # under existential quantifiers, over past-only operands.
+    peel_vars: List[str] = []
+    core = formula
+    while isinstance(core, Exists):
+        peel_vars.extend(core.variables)
+        core = core.sub
+    if isinstance(core, FUTURE_NODES):
+        return _compile_future_policy(gen, core, peel_vars, header)
+
+    check_safety(formula)
+    root_name, root_cols = gen.compile(formula)
 
     footer = []
     if root_cols:
@@ -829,6 +1065,75 @@ def compile_policy(
         footer.append("out mf_ts")
         footer.append("out mf_setout as mf_set")
 
+    return "\n".join(header + gen.lines + footer) + "\n"
+
+
+def _compile_future_policy(
+    gen: "_CodeGen", core: Formula, peel_vars: List[str], header: List[str]
+) -> str:
+    """Compile EXISTS* (future-op over past operands) with late verdicts."""
+    if isinstance(core, (Eventually, Until)) and core.interval.high is None:
+        raise UnsupportedFragmentError(
+            f"{type(core).__name__.upper()}{core.interval} has an unbounded "
+            f"future interval; only bounded future is monitorable"
+        )
+    if (
+        isinstance(core, Next)
+        and core.interval.high is None
+        and not _empty_on_empty_db(core.sub)
+    ):
+        # MonPoly evaluates the last timepoint's upper-unbounded NEXT against
+        # a virtual empty timepoint at timestamp infinity; for operands that
+        # can be nonempty on an empty database (negation, equalities,
+        # temporal state) that produces verdicts our encoding does not emit.
+        raise UnsupportedFragmentError(
+            "NEXT with an unbounded interval is supported only over operands "
+            "that are empty on an empty database (pure positive "
+            "predicate/join structure); bound the interval or simplify the "
+            "operand"
+        )
+    if isinstance(core, (Next, Eventually)):
+        operands = [core.sub]
+    else:
+        # A negated-open left-hand side ((NOT gamma) UNTIL beta) is handled by
+        # the kill-register; safety-check gamma itself, not the Not wrapper.
+        left_checkable = core.left.sub if (
+            isinstance(core.left, Not) and _fv(core.left.sub)
+        ) else core.left
+        if not _fv(left_checkable) <= _fv(core.right):
+            raise UnsupportedFragmentError(
+                f"UNTIL: variables of the left-hand side "
+                f"({sorted(_fv(left_checkable))}) must be covered by the "
+                f"right-hand side ({sorted(_fv(core.right))})"
+            )
+        operands = [left_checkable, core.right]
+    for operand in operands:
+        check_safety(operand)
+
+    late_name, value_cols = gen.compile_future_root(core)
+    final_cols = [c for c in value_cols if c not in peel_vars]
+    if final_cols != value_cols:
+        kept = [value_cols.index(c) + 1 for c in final_cols]
+        projected = _list_expr(
+            ["List.get(e, 0)"] + [f"List.get(e, {i})" for i in kept]
+        )
+        gen.lines.append(
+            f"def mf_frp: {EV_SET_T} = slift1({late_name}, (s: {SET_T}) => "
+            f"Set.map(s, (e: List[Int]) => {projected}))"
+        )
+        late_name = "mf_frp"
+
+    footer = [
+        f"def mf_haslate: Events[Bool] = slift1({late_name}, (s: {SET_T}) => "
+        f"Set.size(s) > 0)",
+        f"out filter({late_name}, mf_haslate) as mf_late_set",
+        "out mf_ts",
+    ]
+    if final_cols:
+        footer.append(
+            f'def mf_cols: Events[String] = default(nil[String], "{",".join(final_cols)}")'
+        )
+        footer.append("out mf_cols")
     return "\n".join(header + gen.lines + footer) + "\n"
 
 

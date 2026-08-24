@@ -41,18 +41,24 @@ CORPUS = [
 ]
 
 OUT_OF_FRAGMENT = [
-    "(P0(x1) UNTIL[0,*) (P1(x1)))",           # future binary
-    "NEXT[0,*) (P2())",                        # future unary
-    "EVENTUALLY[0,*) (P2())",                  # future unary
+    "(P0(x1) UNTIL[0,*) (P1(x1)))",           # unbounded future interval
+    "EVENTUALLY[0,*) (P2())",                  # unbounded future interval
+    "ONCE[0,*) ((EVENTUALLY[0,2] (P2())))",    # future nested under past
+    "((EVENTUALLY[0,2] (P0(x1))) AND (P1(x1)))",  # future nested under AND
+    "NEXT[0,*) ((NEXT[0,*) (P2())))",          # future nested under future
+    "EVENTUALLY[3,1] (P0(x1))",                # negative-length interval
+    "EVENTUALLY[0,0) (P0(x1))",                # empty interval
+    "NEXT[0,*) ((ONCE[0,*) (P0(x1))))",        # unbounded NEXT over stateful operand
     "FORALL y1. (P0(y1))",                     # universal
-    "ONCE[0,5) (P2())",                        # bounded interval
-    "PREVIOUS[2,*) (P2())",                    # nonzero lower bound
+    "ONCE[0,5) (P2())",                        # bounded PAST interval
+    "PREVIOUS[2,*) (P2())",                    # nonzero lower bound (past)
     "NOT (P0(x1))",                            # top-level open negation (MFOTL source)
     "(P2() AND (NOT (P0(x1))))",               # unguarded open negation, nested
     "(P0(x1) OR (P3(x1,x2)))",                 # OR with differing vars
     "(x1 = x2)",                               # var = var
     "((P0(x1)) AND ((NOT (P3(x1,x2)))))",      # anti-join not covered
     "(P3(x1,x2) SINCE[0,*) (P0(x1)))",         # SINCE lhs not covered
+    "(P3(x1,x2) UNTIL[0,4] (P0(x1)))",         # UNTIL lhs not covered
 ]
 
 
@@ -122,6 +128,7 @@ def test_trace_converter():
         "1: mf_p_P3 = Set(List(1, 2))",
         "3: mf_ts = 105",
         "3: mf_p_P2 = Set(List())",
+        "4: mf_eof = ()",  # finite-trace sentinel for future-operator flushes
     ], out
     _expect_raises(
         TraceConversionException,
@@ -189,6 +196,82 @@ def test_reference_evaluator():
     # tp0: beta holds -> {7}; tp1: PREV P0 = {7}, carried; tp2: PREV P0 = {7}
     # (P0 at tp1), carried.
     assert [bool(vals) for _, vals in rows] == [True, True, True]
+
+
+def test_phase2_future():
+    """Bounded-future roots: codegen contract, reference semantics, and (if
+    available) wrapper parsing of tagged late verdicts."""
+    from Archive.Implementations.Builders.ProcessorBuilder.PolicyConverters.TeSSLaPolicyConverter.mfotl2tessla import (
+        Eventually, Interval,
+    )
+
+    spec = compile_policy("EVENTUALLY[0,2] (P0(x1))", SIG)
+    assert "in mf_eof: Events[Unit]" in spec
+    assert "out filter(mf_frf, mf_haslate) as mf_late_set" in spec
+    assert "mf_fr_flush" in spec  # finite-trace flush at end of trace
+    assert "mf_v" not in spec  # future roots have no synchronous verdict
+    closed_spec = compile_policy("EVENTUALLY[0,4] (P0(9))", SIG)
+    assert "mf_cols" not in closed_spec
+    until_spec = compile_policy("((NOT (P0(x1))) UNTIL[0,4) (P1(x1)))", SIG)
+    assert "mf_late_set" in until_spec
+
+    # Interval exclusivity is preserved by the parser.
+    formula = parse_policy("EVENTUALLY[1,3) (P0(x1))")
+    assert isinstance(formula, Eventually)
+    assert isinstance(formula.interval, Interval)
+    assert formula.interval.high == 3 and formula.interval.high_exclusive
+
+    # Reference finite-trace semantics, hand-computed:
+    # trace tps 0..2, ts 100/101/105; EVENTUALLY[0,2] P1(x1).
+    from Infrastructure.tests.mfotl_ref_eval import evaluate_policy
+    trace = parse_csv_trace(
+        [
+            "P0, tp=0, ts=100, x0=7",
+            "P1, tp=1, ts=101, x0=5",
+            "P1, tp=2, ts=105, x0=6",
+        ]
+    )
+    rows, closed = evaluate_policy(parse_policy("EVENTUALLY[0,2] (P1(x1))"), trace)
+    by_tp = {tp: {dict(v)["x1"] for v in vals} for tp, vals in rows}
+    # tp0 [100,102]: P1@101 -> {5}; tp1 [101,103]: {5}; tp2 [105,107]: {6}
+    # (tp2's window is open at end of trace; finite-trace still counts j=2).
+    assert by_tp == {0: {5}, 1: {5}, 2: {6}}, by_tp
+    assert closed == {0, 1, 2}
+
+    # MonPoly's virtual empty timepoint at timestamp infinity: an
+    # upper-unbounded NEXT over carried state IS satisfied at the last
+    # timepoint (the compiler rejects this family; the reference models it).
+    rows, _ = evaluate_policy(
+        parse_policy("NEXT[0,*) ((ONCE[0,*) (P1(x1))))"), trace
+    )
+    virtual = {tp: {dict(v)["x1"] for v in vals} for tp, vals in rows}
+    assert virtual == {0: {5}, 1: {5, 6}, 2: {5, 6}}, virtual
+
+    try:
+        from Archive.Implementations.Monitors.TeSSLa.TeSSLa import TeSSLa
+    except ImportError as e:
+        print(f"  (wrapper part skipped: {e})")
+        return
+    from Infrastructure.DataTypes.Verification.OutputStructures.Structures.OooVerdicts import OooVerdicts
+
+    wrapper = object.__new__(TeSSLa)
+    stdout = "\n".join([
+        "0: mf_cols = x1",
+        "0: mf_ts = 100",
+        "1: mf_ts = 101",
+        "2: mf_late_set = Set(List(0, 5), List(1, 5))",
+        "2: mf_ts = 105",
+        "3: mf_late_set = HashSet(List(2, 6))",
+    ])
+    tool = wrapper.post_processing_offline(stdout)
+    assert isinstance(tool, OooVerdicts), type(tool)
+    assert set(tool.time_points().keys()) == {0, 1, 2}
+    assert tool.time_points()[0] == 100
+    values_tp0 = [a.values for a in tool.retrieve(0)[2]]
+    assert values_tp0 == [["5"]], values_tp0
+    # Closed future roots re-key into a PropositionList.
+    closed_tool = wrapper.post_processing_offline("5: mf_late_set = Set(List(3))")
+    assert set(closed_tool.time_points().keys()) == {3}
 
 
 def test_phase1_verdict_parsing():
@@ -295,6 +378,7 @@ def main():
         test_trace_converter,
         test_reference_evaluator,
         test_phase1_verdict_parsing,
+        test_phase2_future,
         test_end_to_end,
     ]
     for test in tests:

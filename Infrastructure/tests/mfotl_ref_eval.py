@@ -17,7 +17,8 @@ import re
 from typing import Dict, FrozenSet, List, Set, Tuple
 
 from Archive.Implementations.Builders.ProcessorBuilder.PolicyConverters.TeSSLaPolicyConverter.mfotl2tessla import (
-    And, Const, Eq, Exists, Formula, Not, Once, Or, Pred, Prev, Since, Var, _fv,
+    And, Const, Eq, Eventually, Exists, Formula, Next, Not, Once, Or, Pred,
+    Prev, Since, Until, Var, _fv,
 )
 
 Valuation = FrozenSet[Tuple[str, int]]
@@ -209,3 +210,102 @@ def parse_csv_trace(lines: List[str]) -> List[TracePoint]:
 def satisfied_timepoints(formula: Formula, trace: List[TracePoint]) -> Set[int]:
     """Timepoints where the existential closure of the formula holds."""
     return {tp for tp, valuations in RefEvaluator(formula).run(trace) if valuations}
+
+
+def evaluate_policy(formula: Formula, trace: List[TracePoint]):
+    """Evaluate a policy that may carry one bounded-future root operator
+    (EXISTS* over NEXT/EVENTUALLY/UNTIL with past-only operands), directly
+    from the semantics over the whole trace.
+
+    Uses FINITE-TRACE semantics, matching MonPoly on an offline log: at the
+    end of the trace, still-open future windows are evaluated over the events
+    that exist (the generated TeSSLa specs implement this with an mf_eof
+    flush).  Returns (rows, closed): rows = [(tp, valuation set)] for every
+    trace timepoint; closed = all timepoints (kept for API stability).
+    """
+    peel: List[str] = []
+    core = formula
+    while isinstance(core, Exists):
+        peel.extend(core.variables)
+        core = core.sub
+    order = [tp for tp, _, _ in trace]
+    if not isinstance(core, (Next, Eventually, Until)):
+        return RefEvaluator(formula).run(trace), set(order)
+
+    taus = {tp: ts for tp, ts, _ in trace}
+    interval = core.interval
+
+    def in_window(delta: int) -> bool:
+        if delta < interval.low:
+            return False
+        if interval.high is None:
+            return True
+        return delta < interval.high if interval.high_exclusive else delta <= interval.high
+
+    def closes(delta: int) -> bool:
+        return delta >= interval.high if interval.high_exclusive else delta > interval.high
+
+    def per_tp(node: Formula) -> Dict[int, Set[Valuation]]:
+        return dict(RefEvaluator(node).run(trace))
+
+    results: Dict[int, Set[Valuation]] = {}
+    if isinstance(core, Next):
+        sub = per_tp(core.sub)
+        # MonPoly evaluates the last timepoint's NEXT against a virtual EMPTY
+        # timepoint at timestamp infinity: its delta satisfies exactly the
+        # upper-unbounded intervals, and the operand is evaluated there with
+        # an empty database (temporal state carries over).
+        virtual_value: Set[Valuation] = set()
+        if interval.high is None and order:
+            virtual_tp = order[-1] + 1
+            extended = trace + [(virtual_tp, taus[order[-1]], {})]
+            virtual_value = dict(RefEvaluator(core.sub).run(extended))[virtual_tp]
+        for idx, i in enumerate(order):
+            if idx + 1 < len(order):
+                successor = order[idx + 1]
+                delta = taus[successor] - taus[i]
+                results[i] = sub[successor] if in_window(delta) else set()
+            else:
+                results[i] = virtual_value
+    elif isinstance(core, Eventually):
+        sub = per_tp(core.sub)
+        for idx, i in enumerate(order):
+            accumulated: Set[Valuation] = set()
+            for j in order[idx:]:
+                delta = taus[j] - taus[i]
+                if closes(delta):
+                    break  # monotone timestamps: nothing further contributes
+                if in_window(delta):
+                    accumulated |= sub[j]
+            results[i] = accumulated
+    else:  # Until
+        negated = isinstance(core.left, Not) and bool(_fv(core.left.sub))
+        alpha_node = core.left.sub if negated else core.left
+        alpha = per_tp(alpha_node)
+        beta = per_tp(core.right)
+        alpha_vars = _fv(alpha_node)
+        for idx, i in enumerate(order):
+            accumulated = set()
+            for j_pos in range(idx, len(order)):
+                j = order[j_pos]
+                delta = taus[j] - taus[i]
+                if closes(delta):
+                    break
+                if in_window(delta):
+                    for valuation in beta[j]:
+                        restricted = _restrict(valuation, alpha_vars)
+                        alive = True
+                        for k in order[idx:j_pos]:
+                            if (restricted in alpha[k]) == negated:
+                                alive = False
+                                break
+                        if alive:
+                            accumulated.add(valuation)
+            results[i] = accumulated
+
+    keep = _fv(core) - set(peel)
+    rows = [
+        (i, {_restrict(v, keep) for v in results[i]} if peel else results[i])
+        for i in order
+    ]
+    return rows, set(order)

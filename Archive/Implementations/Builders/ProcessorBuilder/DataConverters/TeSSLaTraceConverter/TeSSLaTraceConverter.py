@@ -127,6 +127,13 @@ class TeSSLaTraceConverter(DataConverterTemplate):
                     "List(" + ", ".join(str(v) for v in row) + ")" for row in tuples
                 )
                 out_lines.append(f"{tp}: mf_p_{predicate} = Set({rendered})")
+        if timepoints:
+            # End-of-trace sentinel, one tick after the last timepoint (a time
+            # with no mf_ts event, so timepoint-synchronous streams stay
+            # silent).  Bounded-future registers flush their residual owed
+            # verdicts on it, matching MonPoly's finite-trace semantics at the
+            # end of the log.
+            out_lines.append(f"{timepoints[-1][0] + 1}: mf_eof = ()")
         return "\n".join(out_lines) + ("\n" if out_lines else "")
 
     @staticmethod
