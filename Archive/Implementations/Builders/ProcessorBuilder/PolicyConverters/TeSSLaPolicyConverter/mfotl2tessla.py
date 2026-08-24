@@ -444,13 +444,6 @@ def _fv(formula: Formula) -> set:
     raise UnsupportedFragmentError(f"Unknown formula node {type(formula).__name__}")
 
 
-def _require_zero_unbounded(interval: Interval, operator: str):
-    if not interval.is_zero_unbounded():
-        raise UnsupportedFragmentError(
-            f"{operator}{interval}: phase 0 supports the interval [0,*) only"
-        )
-
-
 def _empty_on_empty_db(formula: Formula) -> bool:
     """True if the formula provably denotes the empty relation on an empty
     database (pure positive predicate/join structure).  Used to gate
@@ -538,15 +531,12 @@ def check_safety(formula: Formula):
         check_safety(formula.sub)
         return
     if isinstance(formula, Prev):
-        _require_zero_unbounded(formula.interval, "PREVIOUS")
         check_safety(formula.sub)
         return
     if isinstance(formula, Once):
-        _require_zero_unbounded(formula.interval, "ONCE")
         check_safety(formula.sub)
         return
     if isinstance(formula, Since):
-        _require_zero_unbounded(formula.interval, "SINCE")
         alpha = formula.left
         if isinstance(alpha, Not):
             alpha_pos = alpha.sub
@@ -791,18 +781,75 @@ class _CodeGen:
         # timepoint whenever the trace does not start at tp 0.  merge ticks
         # exactly on real timepoints (last wins over the empty tick once a
         # previous value exists; both fire on the same mf_ts event).
-        self.emit(name, f"merge(last({sub_name}, mf_ts), mf_tick)")
+        if formula.interval.is_zero_unbounded():
+            self.emit(name, f"merge(last({sub_name}, mf_ts), mf_tick)")
+            return name, sub_cols
+        window = _window_cond(formula.interval, "(tau - pts)")
+        self.lines.append(
+            f"def {name}_pts: Events[Int] = merge(last(mf_ts, mf_ts), const(-1, mf_ts))"
+        )
+        self.emit(
+            name,
+            f"slift3(merge(last({sub_name}, mf_ts), mf_tick), {name}_pts, mf_ts, "
+            f"(p: {SET_T}, pts: Int, tau: Int) => "
+            f"if pts >= 0 && ({window}) then p else {EMPTY_SET})",
+        )
         return name, sub_cols
+
+    # Metric past registers hold [anchor_ts] + tuple pairs: an anchor expires
+    # once the (monotone) current timestamp puts it past the upper bound; the
+    # output filters anchors that have aged past the lower bound.  For an
+    # unbounded upper bound only the EARLIEST anchor per tuple is kept
+    # (it dominates the lower-bound check and never expires), bounding memory.
+
+    def _anchor_prune(self, interval: Interval) -> str:
+        if interval.high is None:
+            return "true"
+        op = "<" if interval.high_exclusive else "<="
+        return f"(tau - List.get(e, 0)) {op} {interval.high}"
+
+    def _anchor_add(self, interval: Interval, target: str) -> str:
+        add = f"Set.add({target}, List.prepend(tau, v))"
+        if interval.high is not None:
+            return add
+        return (
+            f"if Set.fold({target}, false, (found: Bool, e2: List[Int]) => "
+            f"found || List.tail(e2) == v) then {target} else {add}"
+        )
+
+    def _anchor_output(self, name: str, interval: Interval):
+        low = f"(tau - List.get(eo, 0)) >= {interval.low}"
+        self.emit(
+            name,
+            f"slift({name}_reg, mf_ts, (r: {SET_T}, tau: Int) => "
+            f"Set.fold(r, {EMPTY_SET}, (oacc: {SET_T}, eo: List[Int]) => "
+            f"if {low} then Set.add(oacc, List.tail(eo)) else oacc))",
+        )
 
     def compile_once(self, formula: Once) -> Tuple[str, List[str]]:
         sub_name, sub_cols = self.compile(formula.sub)
         name = self.fresh()
-        self.emit(f"{name}_prev", f"merge(last({name}, mf_ts), mf_tick)")
-        body = (
-            f"slift({name}_prev, {sub_name}, (p: {SET_T}, c: {SET_T}) => "
-            f"Set.union(p, c))"
+        if formula.interval.is_zero_unbounded():
+            self.emit(f"{name}_prev", f"merge(last({name}, mf_ts), mf_tick)")
+            body = (
+                f"slift({name}_prev, {sub_name}, (p: {SET_T}, c: {SET_T}) => "
+                f"Set.union(p, c))"
+            )
+            self.emit(name, body)
+            return name, sub_cols
+        interval = formula.interval
+        self.lines.append(
+            f"def {name}_pv: {EV_SET_T} = merge(last({name}_reg, mf_ts), mf_tick)"
         )
-        self.emit(name, body)
+        self.lines.append(
+            f"def {name}_reg: {EV_SET_T} = slift3({name}_pv, {sub_name}, mf_ts, "
+            f"(r: {SET_T}, phi: {SET_T}, tau: Int) => {{\n"
+            f"  def kept: {SET_T} = Set.fold(r, {EMPTY_SET}, (kacc: {SET_T}, e: List[Int]) =>\n"
+            f"    if {self._anchor_prune(interval)} then Set.add(kacc, e) else kacc)\n"
+            f"  Set.fold(phi, kept, (aacc: {SET_T}, v: List[Int]) => {self._anchor_add(interval, 'aacc')})\n"
+            f"}})"
+        )
+        self._anchor_output(name, interval)
         return name, sub_cols
 
     def compile_since(self, formula: Since) -> Tuple[str, List[str]]:
@@ -815,27 +862,52 @@ class _CodeGen:
             negated = False
         alpha_name, alpha_cols = self.compile(alpha_pos)
         beta_name, beta_cols = self.compile(formula.right)
-        projection = _tuple_from("t", [beta_cols.index(c) for c in alpha_cols])
         name = self.fresh()
-        self.emit(f"{name}_prev", f"merge(last({name}, mf_ts), mf_tick)")
+        if formula.interval.is_zero_unbounded():
+            projection = _tuple_from("t", [beta_cols.index(c) for c in alpha_cols])
+            self.emit(f"{name}_prev", f"merge(last({name}, mf_ts), mf_tick)")
+            if negated:
+                keep = (
+                    f"if Set.contains(a, {projection}) then acc else Set.add(acc, t)"
+                )
+            else:
+                keep = (
+                    f"if Set.contains(a, {projection}) then Set.add(acc, t) else acc"
+                )
+            self.emit(
+                f"{name}_keep",
+                f"slift({name}_prev, {alpha_name}, (p: {SET_T}, a: {SET_T}) => "
+                f"Set.fold(p, {EMPTY_SET}, (acc: {SET_T}, t: List[Int]) => {keep}))",
+            )
+            body = (
+                f"slift({beta_name}, {name}_keep, (b: {SET_T}, k: {SET_T}) => "
+                f"Set.union(b, k))"
+            )
+            self.emit(name, body)
+            return name, beta_cols
+        # Metric SINCE: anchors are beta occurrences; a carried anchor needs
+        # alpha continuity at the current timepoint (new anchors, j == i,
+        # have an empty continuity range).  Anchored tuples are tails, so the
+        # alpha projection reads columns at +1 offsets.
+        interval = formula.interval
+        tail_projection = _tuple_from(
+            "e", [beta_cols.index(c) + 1 for c in alpha_cols]
+        )
+        continuity = f"Set.contains(al, {tail_projection})"
         if negated:
-            keep = (
-                f"if Set.contains(a, {projection}) then acc else Set.add(acc, t)"
-            )
-        else:
-            keep = (
-                f"if Set.contains(a, {projection}) then Set.add(acc, t) else acc"
-            )
-        self.emit(
-            f"{name}_keep",
-            f"slift({name}_prev, {alpha_name}, (p: {SET_T}, a: {SET_T}) => "
-            f"Set.fold(p, {EMPTY_SET}, (acc: {SET_T}, t: List[Int]) => {keep}))",
+            continuity = f"!{continuity}"
+        self.lines.append(
+            f"def {name}_pv: {EV_SET_T} = merge(last({name}_reg, mf_ts), mf_tick)"
         )
-        body = (
-            f"slift({beta_name}, {name}_keep, (b: {SET_T}, k: {SET_T}) => "
-            f"Set.union(b, k))"
+        self.lines.append(
+            f"def {name}_reg: {EV_SET_T} = slift4({name}_pv, {alpha_name}, {beta_name}, mf_ts, "
+            f"(r: {SET_T}, al: {SET_T}, be: {SET_T}, tau: Int) => {{\n"
+            f"  def kept: {SET_T} = Set.fold(r, {EMPTY_SET}, (kacc: {SET_T}, e: List[Int]) =>\n"
+            f"    if ({self._anchor_prune(interval)}) && ({continuity}) then Set.add(kacc, e) else kacc)\n"
+            f"  Set.fold(be, kept, (aacc: {SET_T}, v: List[Int]) => {self._anchor_add(interval, 'aacc')})\n"
+            f"}})"
         )
-        self.emit(name, body)
+        self._anchor_output(name, interval)
         return name, beta_cols
 
     # --- Phase 2: bounded-future root operators -----------------------------

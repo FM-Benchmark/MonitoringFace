@@ -50,8 +50,6 @@ OUT_OF_FRAGMENT = [
     "EVENTUALLY[0,0) (P0(x1))",                # empty interval
     "NEXT[0,*) ((ONCE[0,*) (P0(x1))))",        # unbounded NEXT over stateful operand
     "FORALL y1. (P0(y1))",                     # universal
-    "ONCE[0,5) (P2())",                        # bounded PAST interval
-    "PREVIOUS[2,*) (P2())",                    # nonzero lower bound (past)
     "NOT (P0(x1))",                            # top-level open negation (MFOTL source)
     "(P2() AND (NOT (P0(x1))))",               # unguarded open negation, nested
     "(P0(x1) OR (P3(x1,x2)))",                 # OR with differing vars
@@ -196,6 +194,52 @@ def test_reference_evaluator():
     # tp0: beta holds -> {7}; tp1: PREV P0 = {7}, carried; tp2: PREV P0 = {7}
     # (P0 at tp1), carried.
     assert [bool(vals) for _, vals in rows] == [True, True, True]
+
+
+def test_metric_past():
+    """Bounded/lower-bounded past intervals: codegen accepts them and the
+    reference evaluator computes them from the semantics."""
+    # Accepted now (rejected in phase 0/1):
+    for policy in ["ONCE[0,5) (P2())", "PREVIOUS[2,*) (P2())",
+                   "ONCE[2,7] (P0(x1))", "(P0(x1) SINCE[1,4] (P1(x1)))"]:
+        spec = compile_policy(policy, SIG)
+        assert "out mf_v" in spec
+    # Anchor registers only appear for metric intervals.
+    assert "_reg" not in compile_policy("ONCE[0,*) (P0(x1))", SIG)
+    assert "_reg" in compile_policy("ONCE[0,5] (P0(x1))", SIG)
+
+    from Infrastructure.tests.mfotl_ref_eval import RefEvaluator
+    trace = parse_csv_trace(
+        [
+            "P0, tp=0, ts=100, x0=1",
+            "P1, tp=1, ts=101, x0=1",
+            "P0, tp=2, ts=103, x0=2",
+            "P1, tp=3, ts=104, x0=2",
+            "P1, tp=4, ts=110, x0=1",
+        ]
+    )
+
+    def sat(policy):
+        rows = RefEvaluator(parse_policy(policy)).run(trace)
+        return {tp: {dict(v)["x1"] for v in vals} for tp, vals in rows if vals}
+
+    # ONCE[2,5): anchors aged 2..4. tp2 (ts103): P0@100 aged 3 -> {1};
+    # tp3 (ts104): P0@100 aged 4 -> {1}, P0@103 aged 1 is too fresh.
+    assert sat("ONCE[2,5) (P0(x1))") == {2: {1}, 3: {1}}, sat("ONCE[2,5) (P0(x1))")
+    # SINCE[1,4]: every in-window anchor loses alpha continuity (P0@103
+    # carries only x0=2, breaking x1=1 at tp2) or is too fresh: empty.
+    assert sat("(P0(x1) SINCE[1,4] (P1(x1)))") == {}, sat(
+        "(P0(x1) SINCE[1,4] (P1(x1)))"
+    )
+    # SINCE[0,4]: the j == i anchor (age 0) is inside the window, with a
+    # vacuous continuity range.
+    assert sat("(P0(x1) SINCE[0,4] (P1(x1)))") == {1: {1}, 3: {2}, 4: {1}}, sat(
+        "(P0(x1) SINCE[0,4] (P1(x1)))"
+    )
+    # PREVIOUS[1,2]: delta to previous tp within [1,2].
+    assert sat("PREVIOUS[1,2] (P0(x1))") == {1: {1}, 3: {2}}, sat(
+        "PREVIOUS[1,2] (P0(x1))"
+    )
 
 
 def test_phase2_future():
@@ -377,6 +421,7 @@ def main():
         test_codegen,
         test_trace_converter,
         test_reference_evaluator,
+        test_metric_past,
         test_phase1_verdict_parsing,
         test_phase2_future,
         test_end_to_end,

@@ -69,23 +69,43 @@ def _restrict(valuation: Valuation, variables: Set[str]) -> Valuation:
     return frozenset((var, val) for var, val in valuation if var in variables)
 
 
+def _in_interval(interval, delta: int) -> bool:
+    if delta < interval.low:
+        return False
+    if interval.high is None:
+        return True
+    return delta < interval.high if interval.high_exclusive else delta <= interval.high
+
+
 class RefEvaluator:
-    """Evaluates one formula over one trace, timepoint by timepoint."""
+    """Evaluates one formula over one trace, timepoint by timepoint.
+
+    Zero-unbounded past intervals use incremental registers; metric past
+    intervals are evaluated DIRECTLY against the recorded per-timepoint
+    history (a deliberately different algorithm than the compiled anchor
+    registers, so the two cannot share a bug)."""
 
     def __init__(self, formula: Formula):
         self.formula = formula
         self.prev_state: Dict[int, Set[Valuation]] = {}
         self.registers: Dict[int, Set[Valuation]] = {}
         self.memo: Dict[int, Set[Valuation]] = {}
+        self.history: Dict[int, List[Tuple[int, Set[Valuation]]]] = {}
         self.first = True
+        self.current_ts = 0
+        self.last_ts = 0
 
     def run(self, trace: List[TracePoint]) -> List[Tuple[int, Set[Valuation]]]:
         results = []
-        for tp, _ts, database in trace:
+        for tp, ts, database in trace:
             self.memo = {}
+            self.current_ts = ts
             sat = self._eval(self.formula, database)
             self._commit(self.formula)
+            for key, value in self.memo.items():
+                self.history.setdefault(key, []).append((ts, value))
             results.append((tp, sat))
+            self.last_ts = ts
             self.first = False
         return results
 
@@ -132,10 +152,20 @@ class RefEvaluator:
             self._eval(node.sub, db)
             if self.first:
                 return set()
-            return self.prev_state.get(id(node), set())
+            value = self.prev_state.get(id(node), set())
+            if node.interval.is_zero_unbounded():
+                return value
+            delta = self.current_ts - self.last_ts
+            return value if _in_interval(node.interval, delta) else set()
         if isinstance(node, Once):
             current = self._eval(node.sub, db)
-            return self.registers.get(id(node), set()) | current
+            if node.interval.is_zero_unbounded():
+                return self.registers.get(id(node), set()) | current
+            result = set(current) if _in_interval(node.interval, 0) else set()
+            for ts_j, past in self.history.get(id(node.sub), []):
+                if _in_interval(node.interval, self.current_ts - ts_j):
+                    result |= past
+            return result
         if isinstance(node, Since):
             alpha = node.left
             negated = isinstance(alpha, Not) and bool(_fv(alpha.sub))
@@ -143,12 +173,34 @@ class RefEvaluator:
             alpha_now = self._eval(alpha_eval, db)
             beta_now = self._eval(node.right, db)
             alpha_vars = _fv(alpha_eval)
-            carried = set()
-            for v in self.registers.get(id(node), set()):
-                inside = _restrict(v, alpha_vars) in alpha_now
-                if inside != negated:
-                    carried.add(v)
-            return beta_now | carried
+            if node.interval.is_zero_unbounded():
+                carried = set()
+                for v in self.registers.get(id(node), set()):
+                    inside = _restrict(v, alpha_vars) in alpha_now
+                    if inside != negated:
+                        carried.add(v)
+                return beta_now | carried
+            # Metric SINCE: scan the recorded history directly.  The anchor
+            # j == now contributes when 0 is inside the interval; an anchor
+            # j < now needs alpha continuity over (j, now], which spans the
+            # alpha history entries after position j plus the current value.
+            result = set(beta_now) if _in_interval(node.interval, 0) else set()
+            beta_hist = self.history.get(id(node.right), [])
+            alpha_hist = self.history.get(id(alpha_eval), [])
+            for j_pos, (ts_j, beta_j) in enumerate(beta_hist):
+                if not _in_interval(node.interval, self.current_ts - ts_j):
+                    continue
+                for v in beta_j:
+                    restricted = _restrict(v, alpha_vars)
+                    alive = (restricted in alpha_now) != negated
+                    if alive:
+                        for k in range(j_pos + 1, len(alpha_hist)):
+                            if (restricted in alpha_hist[k][1]) == negated:
+                                alive = False
+                                break
+                    if alive:
+                        result.add(v)
+            return result
         raise ValueError(f"Unsupported node {type(node).__name__}")
 
     def _commit(self, node: Formula):
