@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y time && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /build/tessla/target/scala-*/tessla-assembly-*.jar /app/tessla.jar
-RUN echo '#!/bin/sh\n/usr/bin/time -v -o scratch/stats.txt java -jar /app/tessla.jar "$@"' > /usr/local/bin/tessla && chmod +x /usr/local/bin/tessla
+# -Xss1g: the interpreter's lazy evaluation recurses proportionally to the
+# size of Set values; converted MFOTL relations overflow the default stack
+# (512m still overflowed on relations of ~10k tuples; 1g completes them).
+RUN echo '#!/bin/sh\n/usr/bin/time -v -o scratch/stats.txt java -Xss1g -jar /app/tessla.jar "$@"' > /usr/local/bin/tessla && chmod +x /usr/local/bin/tessla
 
 ENTRYPOINT ["tessla"]
