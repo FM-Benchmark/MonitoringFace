@@ -1,4 +1,4 @@
-# TeSSLaPolicyConverter (phases 0-2: past fragment, valuation verdicts, bounded-future roots)
+# TeSSLaPolicyConverter (phases 0-3: metric past + valuation verdicts + bounded-future roots + rust lane)
 
 In-process compiler from MonPoly-syntax MFOTL to a self-contained TeSSLa
 specification (`srv-policy`), making TeSSLa reachable from the MFOTL
@@ -41,12 +41,15 @@ delay-free (timestamp-conservative) TeSSLa fragment.
 
 ## Supported fragment (hard error outside it)
 
-Past-only MFOTL with intervals exactly `[0,*)`: predicates over `int`
-columns, `AND` / `OR` (equal free variables) / guarded or closed `NOT` /
-`EXISTS` / `var = const`, `PREVIOUS[0,*)`, `ONCE[0,*)`, `SINCE[0,*)` (also
-with negated left-hand side), under MonPoly-style safety. A top-level
-`NOT (...)` is treated as the NEGATED_MFOTL convention: the inner formula's
-closure is monitored and the boolean verdict inverted.
+Past MFOTL with ARBITRARY intervals: predicates over `int` columns, `AND` /
+`OR` (equal free variables) / guarded or closed `NOT` / `EXISTS` /
+`var = const`, `PREVIOUS_I`, `ONCE_I`, `SINCE_I` (also with a negated
+left-hand side), under MonPoly-style safety. Zero-unbounded intervals use
+plain set registers; metric intervals use anchor registers holding
+`[anchor_ts] + tuple` pairs, pruned once the monotone current timestamp
+passes the upper bound; for upper-unbounded intervals only the earliest
+anchor per tuple is kept (it dominates the lower-bound check), bounding
+memory.
 
 Phase 2 adds ONE bounded-future operator at the root, optionally under
 existential quantifiers, over past-only operands: `NEXT_I` (any interval),
@@ -71,9 +74,22 @@ srv setups: converter traces end with the mf_eof sentinel, so a native spec
 run with reject_undeclared: True on a converter trace will error at the
 sentinel; native specs should either declare mf_eof or not opt into -r.
 
-Not yet: bounded/lower-bounded PAST intervals, future operators nested under
-other operators, aggregations, MFODL regex, `let`/`rec`, string data (TeSSLa
-prints strings unquoted, so string verdicts cannot be re-parsed reliably).
+Not yet: future operators nested under other operators, aggregations,
+MFODL regex, `let`/`rec`, string data (TeSSLa prints strings unquoted, so
+string verdicts cannot be re-parsed reliably).
+
+## Backends
+
+The wrapper runs the interpreter by default; `params: backend: rust` adds an
+`offline_compile` step (`tessla compile-rust -b scratch/mf_monitor`) and runs
+the compiled native monitor on the trace via stdin, roughly two orders of
+magnitude faster and free of the interpreter's stack-depth ceiling. Both
+lanes need the CMD-contract Docker image (no ENTRYPOINT, launcher passes
+`name="tessla"`, cargo installed, crate registry pre-warmed at image build);
+after editing the Dockerfile remember that commit-pinned images are never
+rebuilt automatically: `docker rmi` the old image first. With the CMD image
+the framework's measurement wrapper works, so `no_measure` is no longer
+needed.
 
 Polarity is keyed on the SOURCE FORMAT, not on syntax: NEGATED_MFOTL input
 (`NOT (phi)` from the negation plumbing) strips the wrapper and monitors phi

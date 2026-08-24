@@ -1,3 +1,4 @@
+import os
 import re
 from typing import AnyStr, Tuple, List, Optional
 
@@ -47,18 +48,61 @@ class TeSSLa(BaseMonitorTemplate, OfflineRunnable):
         self.params[FOLDER_KEY] = path_to_folder
         self.params[POLICY_KEY] = policy_file.removeprefix("data/")
 
+    def offline_compile(self):
+        # backend: rust compiles the generated spec to a native monitor with
+        # the compile-rust backend (DejaVu's compile-per-policy precedent).
+        # The interpreter's lazy evaluation recurses with Set sizes and is
+        # ~100x slower; the native monitor has neither problem.
+        if str(self.params.get("backend", "")).lower() != "rust":
+            return
+        policy = str(self.params[POLICY_KEY]).removeprefix("data/")
+        # TeSSLa 2.1.0's rust codegen fails on the owed-register construction
+        # (undefined var_emitset_*) that EVENTUALLY/UNTIL roots compile to;
+        # NEXT and all past specs build fine.  Fail loudly up front instead
+        # of a misleading not-found error at run time.
+        policy_path = os.path.join(str(self.params[FOLDER_KEY]), policy)
+        try:
+            with open(policy_path, "r") as spec_file:
+                spec_text = spec_file.read()
+        except OSError:
+            spec_text = ""
+        if "mf_fr_st" in spec_text:
+            raise ToolException(
+                "TeSSLa backend: rust cannot compile EVENTUALLY/UNTIL specs "
+                "(TeSSLa 2.1.0 compile-rust codegen bug, undefined "
+                "var_emitset_*); use the interpreter lane for future-bearing "
+                "policies"
+            )
+        cmd = ["compile-rust", "-b", "scratch/mf_monitor", policy]
+        out, code = self.image.run_offline(
+            self.params[FOLDER_KEY], cmd, measure=False, name="tessla"
+        )
+        # compile-rust exits 0 even when cargo/codegen fails (same family as
+        # the interpreter's exit-0-on-runtime-error); the binary's existence
+        # is the reliable success signal.
+        binary_path = os.path.join(str(self.params[FOLDER_KEY]), "scratch", "mf_monitor")
+        if code != 0 or not os.path.isfile(binary_path):
+            raise ToolException(
+                f"TeSSLa compile-rust failed (code {code}, "
+                f"binary present: {os.path.isfile(binary_path)}): {out[-500:]}"
+            )
+
     def construct_offline_command(self, time_on=None, time_out=None) -> Tuple[List[str], Optional[str]]:
-        # NOTE: experiments must set no_measure: True. The TeSSLa image keeps
-        # ENTRYPOINT ["tessla"] (with its own /usr/bin/time wrapper writing
-        # scratch/stats.txt), so the framework's measure path, which wraps the
-        # command in /bin/sh -c, would hand "/bin/sh" to the tessla launcher
-        # as its spec argument and fail with a confusing CLI error.
+        # Requires the CMD-contract image (no ENTRYPOINT): the command names
+        # the tessla launcher explicitly, so the framework's measurement
+        # wrapper (/bin/sh -c ".. /usr/bin/time -v .. <cmd>") works and
+        # no_measure is no longer needed.
         #
         # The data folder itself is the container mount (WORKDIR=/data), so paths must be
         # relative to it. Strip any leading "data/" here so this holds whether the framework
         # took the auto-conversion (distance 0) path or the custom preprocessing path.
         policy = str(self.params[POLICY_KEY]).removeprefix("data/")
         trace = str(self.params[TRACE_KEY]).removeprefix("data/")
+        if str(self.params.get("backend", "")).lower() == "rust":
+            # The compiled monitor reads its trace from stdin; the redirect
+            # also holds under the measurement wrapper (the outer shell's
+            # stdin propagates to the inner /bin/sh -c).
+            return ["-c", f"scratch/mf_monitor < {trace}"], "/bin/sh"
         # -r: without it the interpreter silently drops events on undeclared
         # streams, so a stream-naming mismatch would look like an empty verdict.
         # Only applied to policies produced by the auto-conversion chain (they
@@ -68,8 +112,8 @@ class TeSSLa(BaseMonitorTemplate, OfflineRunnable):
         converted = str(self.params.get(POLICY_KEY, "")).startswith("scratch/")
         reject = (converted or self.params.get("reject_undeclared")) and not self.params.get("no_reject_undeclared")
         flags = ["--reject-undeclared-inputs"] if reject else []
-        cmd = flags + [policy, trace]
-        return cmd, "interpreter"
+        cmd = ["interpreter"] + flags + [policy, trace]
+        return cmd, "tessla"
 
     def post_processing_offline(self, stdout_input: AnyStr) -> AbstractOutputStructure:
         # The interpreter exits 0 on runtime-phase errors (including trace

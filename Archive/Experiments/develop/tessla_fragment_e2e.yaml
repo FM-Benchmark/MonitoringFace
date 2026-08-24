@@ -13,8 +13,11 @@ monitors:
   - identifier: TeSSLa
     name: TeSSLa
     commit: b1964bd445286832bd2cb120ca7586858e941ceb
+  - identifier: TeSSLa
+    name: TeSSLa Rust
+    commit: b1964bd445286832bd2cb120ca7586858e941ceb
     params:
-      no_measure: True
+      backend: rust
   - identifier: VeriMon
     name: VeriMon
     branch: master
@@ -65,6 +68,7 @@ experiment_type: Signature
 
 tools_to_build:
   - TeSSLa
+  - TeSSLa Rust
   - VeriMon
 
 seeds:
