@@ -756,10 +756,16 @@ class _CodeGen:
 def compile_policy(
     policy_text: str,
     signature_text: str,
-    debug_set_output: bool = False,
     source_negated: bool = False,
 ) -> str:
-    """Compile a phase-0 MFOTL policy + signature into a TeSSLa specification.
+    """Compile a phase-0/1 MFOTL policy + signature into a TeSSLa specification.
+
+    Verdict outputs: ``mf_v`` (bool per timepoint) always; for policies with
+    free variables additionally the phase-1 valuation-set contract read by
+    ``TeSSLa.post_processing_offline``: ``mf_cols`` (the column order, one
+    string event at time 0), an ``mf_ts`` echo (timestamp per timepoint), and
+    ``mf_set`` (the satisfying valuations as a Set of Lists, emitted exactly
+    at satisfying timepoints).
 
     ``source_negated`` marks NEGATED_MFOTL input, i.e. a file containing
     ``NOT (phi)`` produced by the negation plumbing.  Framework convention
@@ -811,9 +817,17 @@ def compile_policy(
         f"Set.size(s) > 0)"
     )
     footer.append("out mf_v")
-    if debug_set_output:
-        footer.append(f"out {root_name} as mf_set")
-        footer.append(f"-- mf_set columns: {root_cols}")
+    if root_cols:
+        # Phase-1 valuation-set verdicts: mf_set fires exactly at satisfying
+        # timepoints (filter samples mf_v at the same tick), mf_cols announces
+        # the column order once, mf_ts recovers the timestamps.
+        footer.append(f"def mf_setout: {EV_SET_T} = filter({root_name}, mf_v)")
+        footer.append(
+            f'def mf_cols: Events[String] = default(nil[String], "{",".join(root_cols)}")'
+        )
+        footer.append("out mf_cols")
+        footer.append("out mf_ts")
+        footer.append("out mf_setout as mf_set")
 
     return "\n".join(header + gen.lines + footer) + "\n"
 
@@ -825,7 +839,7 @@ if __name__ == "__main__":
     if len(args) != 2:
         print(
             "usage: python mfotl2tessla.py <signature.sig> <policy.policy> "
-            "[--debug-set] [--negated]",
+            "[--negated]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -837,7 +851,6 @@ if __name__ == "__main__":
         compile_policy(
             policy,
             signature,
-            debug_set_output="--debug-set" in sys.argv,
             source_negated="--negated" in sys.argv,
         ),
         end="",

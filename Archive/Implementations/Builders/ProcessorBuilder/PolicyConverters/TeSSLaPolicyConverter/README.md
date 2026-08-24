@@ -1,4 +1,4 @@
-# TeSSLaPolicyConverter (phase 0)
+# TeSSLaPolicyConverter (phase 0 + phase-1 valuation verdicts)
 
 In-process compiler from MonPoly-syntax MFOTL to a self-contained TeSSLa
 specification (`srv-policy`), making TeSSLa reachable from the MFOTL
@@ -23,7 +23,17 @@ benchmarks via the automatic conversion router. Companion pieces:
 | database relation of predicate `P` at `i` | one event `i: mf_p_P = Set(List(args), ...)` (absent = empty, restored via `merge`) |
 | subformula | one `Events[Set[List[Int]]]` stream, columns = sorted free variables |
 | temporal operators | `last`-based registers (delay-free) |
-| verdict | `out mf_v: Events[Bool]`, true iff the existential closure holds |
+| verdict (boolean) | `out mf_v: Events[Bool]`, true iff the existential closure holds |
+| verdict (valuations, open formulas) | `mf_cols` (column order, one string event at time 0), `mf_ts` echo, `mf_set` = the satisfying valuation set, emitted exactly at satisfying timepoints |
+
+The wrapper turns the valuation contract into a `Verdicts` structure (values
+kept as strings, matching `parse_pattern`'s convention), so the framework
+compares TeSSLa against the MonPoly-family oracle value by value; `Assignment`
+equality is variable-name-based, so the sorted column order compares correctly
+against the oracle's own order. Closed formulas and native srv case-study
+specs fall back to the propositional `PropositionList` path. Note: phase 1
+also fixed `Verdicts.retrieve` (it matched on the timestamp instead of the
+timepoint, silently skipping value-level comparison whenever ts != tp).
 
 Duplicate timestamps across timepoints, empty databases, and multi-tuple
 relations are all representable; the generated specification stays in the

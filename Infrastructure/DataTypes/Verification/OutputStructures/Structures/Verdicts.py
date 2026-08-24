@@ -20,7 +20,12 @@ class Verdicts(AbstractOutputStructure):
         return as_oracle(self, other)
 
     def retrieve(self, time_point):
-        for (tp, _, val) in self.verdict:
+        # Entries are stored as (time_stamp, time_point, values); match on the
+        # TIMEPOINT (second element). The old unpacking matched on the
+        # timestamp, which only worked by coincidence on traces with ts == tp
+        # and otherwise silently skipped the value-level comparison
+        # (both sides returned None for every timepoint).
+        for (_, tp, val) in self.verdict:
             if tp == time_point:
                 return self.tp_to_ts[time_point], time_point, val
         return None

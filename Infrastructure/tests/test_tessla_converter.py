@@ -85,8 +85,15 @@ def test_codegen():
         assert "in mf_ts: Events[Int]" in spec
         assert "in mf_p_P0: Events[Set[List[Int]]]" in spec
         assert "out mf_v" in spec
-        assert "mf_set" not in spec  # debug output is opt-in
         assert "delay(" not in spec  # generated specs are delay-free
+    # Phase-1 valuation-set contract: emitted for open formulas only.
+    open_spec = compile_policy(CORPUS[1], SIG)
+    assert 'default(nil[String], "x1,x2")' in open_spec
+    assert "out mf_setout as mf_set" in open_spec
+    assert "out mf_ts" in open_spec
+    closed_spec = compile_policy(CORPUS[0], SIG)
+    assert "mf_set" not in closed_spec
+    assert "mf_cols" not in closed_spec
     # NEGATED_MFOTL input strips the wrapper NOT and compiles the original
     # policy for satisfaction (framework negation convention, no inversion).
     negated_spec = compile_policy(f"NOT ({CORPUS[1]})", SIG, source_negated=True)
@@ -184,6 +191,61 @@ def test_reference_evaluator():
     assert [bool(vals) for _, vals in rows] == [True, True, True]
 
 
+def test_phase1_verdict_parsing():
+    """Wrapper builds Verdicts from the phase-1 contract and the framework
+    comparator accepts them against an oracle in a DIFFERENT variable order.
+    Needs the framework's docker dependency chain; run under the repo venv."""
+    try:
+        from Archive.Implementations.Monitors.TeSSLa.TeSSLa import TeSSLa
+    except ImportError as e:
+        print(f"  (skipped: framework import unavailable: {e})")
+        return
+    from Archive.Implementations.Monitors.SharedFunctions import parse_monpoly_output
+    from Infrastructure.DataTypes.Verification.OutputStructures.Structures.Verdicts import Verdicts
+    from Infrastructure.DataTypes.Verification.OutputStructures.SubTypes.VariableOrder import VariableOrder
+    from Infrastructure.Monitors.MonitorExceptions import ToolException
+
+    wrapper = object.__new__(TeSSLa)
+    stdout = "\n".join([
+        "0: mf_cols = x1,x2",
+        "3: mf_ts = 100",
+        "3: mf_set = Set(List(1, 2), List(3, 4))",
+        "3: mf_v = true",
+        "5: mf_ts = 101",
+        "5: mf_v = false",
+        "7: mf_ts = 105",
+        "7: mf_set = HashSet(List(1, 2))",  # JVM prints large sets this way
+        "7: mf_v = true",
+    ])
+    tool = wrapper.post_processing_offline(stdout)
+    assert isinstance(tool, Verdicts), type(tool)
+    assert tool.retrieve_order() == ["x1", "x2"]
+    assert set(tool.time_points().keys()) == {3, 7}
+    assert tool.time_points()[3] == 100
+
+    # Oracle in MonPoly's own (different) variable order, same valuations.
+    oracle = parse_monpoly_output(
+        Verdicts(VariableOrder(["x2", "x1"])),
+        "@100 (time point 3): (2,1) (4,3)\n@105 (time point 7): (2,1)\n",
+    )
+    ok, message = oracle.as_oracle(tool)
+    assert ok, message
+
+    # A value-level difference must be caught (presence alone matches here).
+    wrong = wrapper.post_processing_offline(stdout.replace("List(3, 4)", "List(3, 5)"))
+    ok, message = oracle.as_oracle(wrong)
+    assert not ok, "comparator must reject differing valuations"
+
+    # Runtime errors still raise, and phase-0 output still degrades cleanly.
+    try:
+        wrapper.post_processing_offline("Runtime error: boom")
+        raise AssertionError("expected ToolException")
+    except ToolException:
+        pass
+    fallback = wrapper.post_processing_offline("2: mf_v = true\n3: mf_v = false")
+    assert set(fallback.time_points().keys()) == {2}
+
+
 def test_end_to_end():
     jar = os.environ.get("TESSLA_JAR")
     if not jar or shutil.which("java") is None:
@@ -232,6 +294,7 @@ def main():
         test_codegen,
         test_trace_converter,
         test_reference_evaluator,
+        test_phase1_verdict_parsing,
         test_end_to_end,
     ]
     for test in tests:
