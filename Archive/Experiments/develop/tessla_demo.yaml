@@ -1,0 +1,101 @@
+experiment_name: tessla_demo
+
+# Short side-by-side demo: TeSSLa (both backends) against four tools of the
+# MFOTL family on the same benchmark settings. Every policy is generated as
+# MFOTL and reaches each tool through the automatic conversion chain:
+#   MonPoly/VeriMon  MFOTL   + MonPoly log   (ReplayerConverter)
+#   WhyMon           negated MFOTL           (NegateMFOTLConverter)
+#   TimelyMon        MFOTL   + CSV           (no conversion)
+#   TeSSLa           srv-policy + srv-trace  (TeSSLaPolicyConverter,
+#                                             TeSSLaTraceConverter)
+# Tools are pinned by branch so the already-built local images are reused.
+#
+# Three settings at two trace lengths keeps the whole run to a few minutes.
+# The benchmark data is pre-generated under experiments/tessla_demo/; the
+# fingerprint stored there matches this generation block, so the platform
+# skips generation. Regenerating instead needs the generator repositories at
+# git.ku.dk, which are reachable from the university network only.
+
+monitors:
+  - identifier: TeSSLa
+    name: TeSSLa
+    commit: b1964bd445286832bd2cb120ca7586858e941ceb
+  - identifier: TeSSLa
+    name: TeSSLa Rust
+    commit: b1964bd445286832bd2cb120ca7586858e941ceb
+    params:
+      backend: rust
+  - identifier: MonPoly
+    name: MonPoly
+    branch: master
+  - identifier: VeriMon
+    name: VeriMon
+    branch: master
+  - identifier: WhyMon
+    name: WhyMon
+    branch: main
+    params:
+      mode: light
+  - identifier: TimelyMon
+    name: TimelyMon
+    branch: development
+    params:
+      worker: 1
+      output_mode: 1
+
+oracles:
+  - identifier: VeriMonOracle
+    name: VeriMonOracle
+    monitor_name: VeriMon
+
+oracle:
+  enabled: true
+  name: VeriMonOracle
+
+runtime_constraints:
+  upper_bound: 30
+
+data_setup:
+  type: SignatureContract
+  SignatureContract:
+    trace_length: 1000
+    event_rate: 1000
+
+policy_setup:
+  type: MfotlPolicyContract
+  MfotlPolicyContract:
+    num_preds: 4
+    prob_eand: 0
+    prob_rand: 0
+    prob_let: 0
+    prob_matchF: 0
+    prob_matchP: 0
+    prob_next: 0
+    prob_eventually: 0
+    prob_until: 0
+    ub: 0
+    unbounded: True
+
+synthetic_config:
+  data_source: SignatureGenerator
+  policy_source: MfotlPolicyGenerator
+  experiment:
+    num_operators: [5]
+    num_fvs: [2]
+    num_setting: [0, 3, 9]
+    num_data_set_sizes: [10, 50]
+
+experiment_type: Signature
+
+tools_to_build:
+  - TeSSLa
+  - TeSSLa Rust
+  - MonPoly
+  - VeriMon
+  - WhyMon
+  - TimelyMon
+
+seeds:
+  '[5, 2, 0]': [314159265,87006]
+  '[5, 2, 3]': [314159265,16519]
+  '[5, 2, 9]': [314159265,53326]
