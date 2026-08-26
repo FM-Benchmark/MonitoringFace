@@ -19,6 +19,10 @@ monitors:
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
     params:
       nofilteremptytp: true
+  - identifier: StaticMon
+    name: StaticMon-frz
+    branch: master
+    commit: 70accf73fdd2da4db9b3adcaf1c2ae0bcb1a1b36
 
 # # Uncomment the following lines to enable the oracle
 # oracles:
@@ -58,6 +62,7 @@ tools_to_build:
   # - VeriMon-const-rel
   # - VeriMon-caching
   - MonPoly-frz
+  - StaticMon-frz
 
 synthetic_config:
   data_source: SignatureGenerator

@@ -19,6 +19,10 @@ monitors:
     commit: bc752d37f1d4560b5667eddac9dd1670451b758e
     params:
       nofilteremptytp: true
+  - identifier: StaticMon
+    name: StaticMon-frz
+    branch: master
+    commit: 70accf73fdd2da4db9b3adcaf1c2ae0bcb1a1b36
 
 # # Uncomment the following lines to enable the oracle
 # oracles:
@@ -62,12 +66,24 @@ synthetic_config:
 
 
 seeds:
-  '[1, 0, 0]': [0, 0]
-  '[2, 0, 0]': [0, 1]
-
+  '[1, 0, 0, 500]': [0, 0]
+  '[1, 0, 0, 1000]': [0, 0]
+  '[1, 0, 0, 2000]': [0, 0]
+  '[1, 0, 0, 4000]': [0, 0]
+  '[1, 0, 0, 8000]': [0, 0]
+  '[1, 0, 0, 10000]': [0, 0]
+  '[1, 0, 0, 20000]': [0, 0]
+  '[2, 0, 0, 500]': [0, 1]
+  '[2, 0, 0, 1000]': [0, 1]
+  '[2, 0, 0, 2000]': [0, 1]
+  '[2, 0, 0, 4000]': [0, 1]
+  '[2, 0, 0, 8000]': [0, 1]
+  '[2, 0, 0, 10000]': [0, 1]
+  '[2, 0, 0, 20000]': [0, 1]
 
 tools_to_build:
   - VeriMon-correct
   # - VeriMon-const-rel
   # - VeriMon-caching
   - MonPoly-frz
+  - StaticMon-frz
