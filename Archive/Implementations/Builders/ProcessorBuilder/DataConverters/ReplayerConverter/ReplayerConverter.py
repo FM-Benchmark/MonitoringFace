@@ -32,6 +32,7 @@ class ReplayerConverter(DataConverterTemplate):
             else:
                 print(f"Error: {result.stderr}")
                 raise ReplayerException(f"Replayer Failed {result.stderr}")
+        return command  # exact argv, recorded in the provenance manifest
 
     def convert(
             self, path_to_folder: AnyStr, data_file: AnyStr,

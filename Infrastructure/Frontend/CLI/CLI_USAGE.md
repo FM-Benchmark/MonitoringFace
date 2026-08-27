@@ -46,6 +46,7 @@ Suites are auto-detected (a top-level `experiments:` key); pass `--suite` to for
 | `--dry-run` | Validate the configuration; do not build or run anything. |
 | `--verbose`, `-v` | Print detailed progress and the commands being executed. |
 | `--debug` | Preserve the per-execution `scratch` data (converted traces/policies) that is otherwise deleted. |
+| `--provenance` / `--no-provenance` | Store each tool's exact final inputs and a `provenance.json` manifest (sources, conversion commands, sha256 of both endpoints) under `results/<run>/provenance/<setting>/<tool>/`. Default on; `--debug` implies it. |
 | `--no-measure` | Disable the in-container `/usr/bin/time` measurement of time and memory. |
 | `--suite` | Force the config to be treated as an experiment suite (otherwise auto-detected). |
 | `--clean` | After running, keep only the latest result/analysis folder for this experiment. |

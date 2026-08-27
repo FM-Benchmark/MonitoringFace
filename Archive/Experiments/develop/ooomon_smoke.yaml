@@ -1,0 +1,40 @@
+# Smoke configuration for the verified out-of-order reference monitor.
+#
+# OOOMon is built from git.ku.dk/krq770/formalized_streaming_monitor; the
+# branch below is the source of truth (the Dockerfiles default to
+# ooomon_rework as well) -- switching to main/a commit later is this one line.
+#
+# Policies must be in the "ooo-fragment" format (fragment-direct
+# s-expressions, see formalized_streaming_monitor/frontend/README.md); traces
+# are the TimelyMon CSV wire format (csv / ooo-csv), watermarks included.
+# Used both as a monitor under test and, via OOOMonOracle, as the verdict
+# oracle for any tool whose output the framework can canonicalise.
+
+experiment_name: ooomon_smoke
+
+monitors:
+  - identifier: OOOMon
+    name: OOOMon
+    branch: ooomon_rework
+  - identifier: TimelyMon
+    name: TimelyMon
+    branch: development
+    params:
+      worker: 1
+      output_mode: 1
+
+oracles:
+  - identifier: OOOMonOracle
+    name: OOOMonOracle
+    monitor_name: OOOMon
+
+oracle:
+  enabled: true
+  name: OOOMonOracle
+
+runtime_constraints:
+  upper_bound: 240
+
+tools_to_build:
+  - OOOMon
+  - TimelyMon

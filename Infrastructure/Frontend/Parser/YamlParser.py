@@ -373,11 +373,20 @@ class YamlParser:
             synthetic_experiment = self.parse_synthetic_experiment()
             seeds = self.parse_seeds()
             if seeds:
-                settings_len = (max(1, len(synthetic_experiment.num_setting)) * max(1, len(synthetic_experiment.num_data_set_sizes))
-                 * max(1, len(synthetic_experiment.num_operators)) * max(1, len(synthetic_experiment.num_fvs)))
+                # seeds may be keyed per full setting incl. data-set size
+                # ([ops, fvs, setting, size]) OR size-independent
+                # ([ops, fvs, setting]) - retrieve_setting_seeds resolves both,
+                # so either exact count is valid
+                base_len = (max(1, len(synthetic_experiment.num_setting))
+                            * max(1, len(synthetic_experiment.num_operators))
+                            * max(1, len(synthetic_experiment.num_fvs)))
+                settings_len = base_len * max(1, len(synthetic_experiment.num_data_set_sizes))
                 print("    -> Seeds length: ", len(seeds), " | Experiment settings length: ", settings_len)
-                if settings_len != len(seeds):
-                    raise YamlParserException(f"Seeds length {len(seeds)} does not match the number of experiment settings {settings_len}")
+                if len(seeds) not in (settings_len, base_len):
+                    raise YamlParserException(
+                        f"Seeds length {len(seeds)} matches neither the number of experiment "
+                        f"settings including data-set sizes ({settings_len}) nor the "
+                        f"size-independent setting count ({base_len})")
 
             coordinator = SyntheticDataCoordinator(
                 experiment=synthetic_experiment, data_setup=data_setup,

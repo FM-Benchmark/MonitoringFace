@@ -35,6 +35,7 @@ class QTLConverter(PolicyConverterTemplate):
                     f.write(line + "\n")
         else:
             raise QTLConverterException("QTLTranslator Failed")
+        return command  # exact argv, recorded in the provenance manifest
 
     @staticmethod
     def conversion_scheme() -> List[Tuple[InputOutputPolicyFormats, InputOutputPolicyFormats]]:

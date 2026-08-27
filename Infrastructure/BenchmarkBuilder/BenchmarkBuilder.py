@@ -20,6 +20,7 @@ from Infrastructure.DataTypes.FileRepresenters.StatsHandler import StatsHandler
 from Infrastructure.Monitors.BaseMonitorTemplate import run_monitor_offline, run_monitor_online
 from Infrastructure.Monitors.MonitorExceptions import TimedOut, ToolException, ResultErrorException
 from Infrastructure.Monitors.MonitorManager import InvalidReturnType, GetMonitorsReturnType, ValidReturnType
+from Infrastructure.Provenance.Provenance import ProvenanceFactory, ProvenanceSession, framework_commit, read_fingerprint
 from Infrastructure.constants import LENGTH, PATH_TO_NAMED_EXPERIMENT, PATH_TO_INFRA, PATH_TO_EXPERIMENTS, PATH_TO_DEBUG, PATH_TO_PROJECT
 from Infrastructure.printing import print_headline, print_footline, normal_line
 
@@ -32,7 +33,8 @@ class RunToolResult(Enum):
 
 
 class BenchmarkBuilder:
-    def __init__(self, experiment_name, coordinator: Coordinator, tools_to_build, repeat_runs, cli_args: CLIArgs):
+    def __init__(self, experiment_name, coordinator: Coordinator, tools_to_build, repeat_runs, cli_args: CLIArgs,
+                 result_folder: Optional[str] = None):
         print_headline("(Starting) Init Benchmark")
         self.coordinator = coordinator
 
@@ -40,6 +42,7 @@ class BenchmarkBuilder:
         self.cli_args = cli_args
         self.repeat_runs = repeat_runs
         self.tools_to_build = tools_to_build
+        self.result_folder = result_folder
 
         path_to_project = self.coordinator.get_path(PATH_TO_PROJECT)
         path_to_infrastructure = path_to_project + "/Infrastructure"
@@ -83,8 +86,22 @@ class BenchmarkBuilder:
         if os.path.exists(path_to_debug):
             ScratchFolderHandler(path_to_debug).remove_folder()
 
+        provenance_factory = None
+        if getattr(self.cli_args, "provenance", False) and self.result_folder is not None:
+            named_experiment_path = self.coordinator.get_path(PATH_TO_NAMED_EXPERIMENT)
+            provenance_factory = ProvenanceFactory(
+                result_folder=self.result_folder,
+                experiment_root=named_experiment_path,
+                fingerprint=read_fingerprint(f"{named_experiment_path}/fingerprint"),
+                commit=framework_commit(self.coordinator.get_path(PATH_TO_PROJECT)),
+                project_root=self.coordinator.get_path(PATH_TO_PROJECT),
+            )
+
         for ((identifier, data_set_size), path_to_folder, data_file, data_type, policy_file, policy_type, signature, result) in self.coordinator.iterate_settings():
             sfh = ScratchFolderHandler(path_to_folder)
+            # repeats share one provenance entry per tool; the repeat index is
+            # dropped from the key and capture verifies repeats hash-identically
+            setting_key = f"{identifier}" if data_set_size is None else f"{identifier}_{data_set_size}"
 
             for i in range(0, self.repeat_runs):
                 tmp_setting_id = f"{identifier}_{i}" if data_set_size is None else f"{identifier}_{data_set_size}_{i}"
@@ -106,20 +123,29 @@ class BenchmarkBuilder:
                                      time_out_dict.add(tool.tool.name)"""
                             pass
 
+                        # each tool starts from an empty scratch: its stored
+                        # provenance (and its debug copy) then contain exactly
+                        # its own inputs, never another tool's leftovers
+                        sfh.clean_up_folder()
+                        provenance = provenance_factory.session(setting_key, path_to_folder, tool.tool) \
+                            if provenance_factory is not None else None
+
                         if self.coordinator.get_runtime_settings() == OnlineOffline.Online:
                             run_tools_online(
                                 result_aggregator=result_aggregator, path_to_folder=path_to_folder, tool=tool.tool,
                                 _result_file=result, setting_id=tmp_setting_id, data_file=data_file,
                                 signature_file=signature, policy_file=policy_file, sfh=sfh, cli_args=self.cli_args,
                                 coordinator=self.coordinator, policy_type=policy_type, data_type=data_type,
-                                online_experiment_contract=self.coordinator.get_online_settings()
+                                online_experiment_contract=self.coordinator.get_online_settings(),
+                                provenance=provenance
                             )
                         else:
                             run_tools_offline(
                                 result_aggregator=result_aggregator, path_to_folder=path_to_folder, tool=tool.tool,
                                 result_file=result, setting_id=tmp_setting_id, data_file=data_file, signature_file=signature,
                                 policy_file=policy_file, sfh=sfh, cli_args=self.cli_args,
-                                coordinator=self.coordinator, policy_type=policy_type, data_type=data_type
+                                coordinator=self.coordinator, policy_type=policy_type, data_type=data_type,
+                                provenance=provenance
                             )
                     else:
                         raise NotImplemented(f"Not implemented for object {tool}")
@@ -168,7 +194,8 @@ def run_tools_online(
         result_aggregator: ResultAggregatorOnline, tool, setting_id: str, path_to_folder: str,
         data_file: str, data_type: InputOutputTraceFormats, policy_file: str, policy_type: InputOutputPolicyFormats,
         signature_file: str, _result_file: str, cli_args: CLIArgs, coordinator: Coordinator,
-        online_experiment_contract: OnlineExperimentContractGeneral, sfh=None
+        online_experiment_contract: OnlineExperimentContractGeneral, sfh=None,
+        provenance: Optional[ProvenanceSession] = None
 ):
     debug_path = coordinator.get_path(PATH_TO_DEBUG)
     try:
@@ -176,7 +203,8 @@ def run_tools_online(
             mon=tool, path_to_folder=path_to_folder, data_file=data_file, signature_file=signature_file,
             policy_file=policy_file, cli_args=cli_args, trace_source_format=data_type, policy_source_format=policy_type,
             path_manager=coordinator.get_path_manager(), online_experiment_contract=online_experiment_contract,
-            script_name=(coordinator.script_name if hasattr(coordinator, "script_name") and coordinator.script_name is not None else None)
+            script_name=(coordinator.script_name if hasattr(coordinator, "script_name") and coordinator.script_name is not None else None),
+            provenance=provenance
         )
 
         processed_elapsed_pairs = []
@@ -228,7 +256,8 @@ def run_tools_online(
 def run_tools_offline(
         result_aggregator: ResultAggregatorOffline, tool, setting_id: str, path_to_folder: str,
         data_file: str, data_type: InputOutputTraceFormats, policy_file: str, policy_type: InputOutputPolicyFormats,
-        signature_file: str, result_file: str, cli_args: CLIArgs, coordinator: Coordinator, sfh=None
+        signature_file: str, result_file: str, cli_args: CLIArgs, coordinator: Coordinator, sfh=None,
+        provenance: Optional[ProvenanceSession] = None
 ) -> RunToolResult:
     debug_path = coordinator.get_path(PATH_TO_DEBUG)
     timeout_value = coordinator.time_out()
@@ -237,7 +266,8 @@ def run_tools_offline(
             mon=tool, path_to_folder=path_to_folder, data_file=data_file, signature_file=signature_file,
             policy_file=policy_file, cli_args=cli_args, trace_source_format=data_type, policy_source_format=policy_type,
             result_file=result_file, timeout_value=timeout_value,
-            oracle=coordinator.get_oracle(), path_manager=coordinator.get_path_manager()
+            oracle=coordinator.get_oracle(), path_manager=coordinator.get_path_manager(),
+            provenance=provenance
         )
 
         if cli_args.debug and sfh is not None:
