@@ -6,6 +6,7 @@ from Infrastructure.AutoConversion.AutoConversionMapping import AutoConversionMa
 from Infrastructure.Builders.ProcessorBuilder.PolicyConverters.PolicyConverterTemplate import PolicyConverterTemplate
 from Infrastructure.DataTypes.PathManager.PathManager import PathManager
 from Infrastructure.AutoConversion.InputOutputPolicyFormats import InputOutputPolicyFormats
+from Infrastructure.Provenance.Provenance import ConversionStep
 from Infrastructure.constants import PATH_TO_PROJECT, PATH_TO_INTERMEDIATE_WORKSPACE, PATH_TO_TRACE_INPUT, \
     PATH_TO_TRACE_OUTPUT
 
@@ -38,7 +39,9 @@ class AutoPolicyConverter:
         except Exception:
             return None
 
-    def convert(self, input_file: str, output_file: str, params) -> str:
+    def convert(self, input_file: str, output_file: str, params) -> Tuple[str, List[ConversionStep]]:
+        """Converts and returns (path relative to the setting folder, the
+        provenance steps of the chain, one per converter invocation)."""
         policy_input_path = self.path_manager.get_path(PATH_TO_TRACE_INPUT)
         intermediate_working_space = self.path_manager.get_path(PATH_TO_INTERMEDIATE_WORKSPACE)
         policy_output_path = self.path_manager.get_path(PATH_TO_TRACE_OUTPUT)
@@ -48,7 +51,7 @@ class AutoPolicyConverter:
         output_path_file = f"{policy_output_path}/{output_file_name}"
         if self.source_format == self.target_format:
             shutil.copy(input_path_file, output_path_file)
-            return output_path_file
+            return output_path_file, []
 
         input_file_name = os.path.basename(input_file)
         intermediate_infile = f"{input_file_name}.in"
@@ -56,16 +59,23 @@ class AutoPolicyConverter:
         intermediate_in = f"{intermediate_working_space}/{intermediate_infile}"
         intermediate_out = f"{intermediate_working_space}/{intermediate_outfile}"
 
+        steps: List[ConversionStep] = []
         shutil.copy(input_path_file, intermediate_in)
         for converter, source, target in self._conversion_chain():
             try:
-                converter.auto_convert(
+                command = converter.auto_convert(
                     intermediate_working_space, intermediate_infile,
                     intermediate_working_space, intermediate_outfile,
                     source, target, params
                 )
                 shutil.copy(intermediate_out, intermediate_in)
+                steps.append(ConversionStep(
+                    converter=converter.__class__.__name__,
+                    source_format=source.value, target_format=target.value,
+                    command=command if isinstance(command, list) else None,
+                    cmd_params=params.get("cmd_params"),
+                ))
             except Exception as e:
-                raise PolicyConversionError(f"AutoTraceConverter: Conversion failed in {converter.__class__.__name__} from {source} to {target}: {e}")
+                raise PolicyConversionError(f"AutoPolicyConverter: Conversion failed in {converter.__class__.__name__} from {source} to {target}: {e}")
         shutil.copy(intermediate_in, output_path_file)
-        return f"scratch/{output_file_name}"
+        return f"scratch/{output_file_name}", steps

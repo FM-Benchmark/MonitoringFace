@@ -122,7 +122,11 @@ def ooo_verdicts_to_proposition_tree(ooo_verdicts: OooVerdicts, new_order: Varia
         values.append([
             ooo_verdicts.tp_to_ts[tp],
             tp,
-            [val for (val_tp, val_ts, vals) in ooo_verdicts.ooo_verdict if tp == val_tp for val in vals]
+            # Entries are stored as (time_stamp, time_point, values); match on
+            # the TIMEPOINT (second element).  The old destructuring matched
+            # against the timestamp slot, which only worked on ts == tp traces
+            # (same bug family as the fixed Verdicts.retrieve).
+            [val for (_val_ts, val_tp, vals) in ooo_verdicts.ooo_verdict if tp == val_tp for val in vals]
         ])
 
     pdt = PropositionTree(new_order)

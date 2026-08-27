@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -18,6 +19,7 @@ from Infrastructure.DataTypes.Verification.OutputStructures.AbstractOutputStrucu
 from Infrastructure.AutoConversion.InputOutputTraceFormats import InputOutputTraceFormats
 from Infrastructure.Monitors.MonitorExceptions import ToolException, ResultErrorException, TimedOut
 from Infrastructure.Oracles.AbstractOracleTemplate import AbstractOracleTemplate
+from Infrastructure.Provenance.Provenance import ConversionRecord, PreprocessingResult, ProvenanceSession
 from Infrastructure.constants import SIGNATURE_KEY, FOLDER_KEY, TRACE_KEY, POLICY_KEY, PATH_TO_BUILD, PATH_TO_ARCHIVE, \
     PATH_TO_TRACE_INPUT, PATH_TO_TRACE_OUTPUT, PATH_TO_INTERMEDIATE_WORKSPACE, IMAGE_POSTFIX, Policy_File, \
     Signature_File, NOMEASURE, STRATIFIED, STRATIFIED_MAP, TRACE_TARGET_FORMAT
@@ -77,7 +79,7 @@ class BaseMonitorTemplate(AutoConvertable):
             self, path_to_folder: str, trace_source_format: InputOutputTraceFormats,
             policy_source_format: InputOutputPolicyFormats, data_file: str, signature_file: str, policy_file: str,
             path_manager: PathManager, verbose=False
-    ) -> float:
+    ) -> PreprocessingResult:
         path_manager.add_path(PATH_TO_TRACE_INPUT, f"{path_to_folder}")
         path_manager.add_path(PATH_TO_INTERMEDIATE_WORKSPACE, f"{path_to_folder}/scratch")
         path_manager.add_path(PATH_TO_TRACE_OUTPUT, f"{path_to_folder}/scratch")
@@ -88,6 +90,7 @@ class BaseMonitorTemplate(AutoConvertable):
         trace_auto_convertible = True if trace_target_format is not None else False
         policy_auto_convertible = True if policy_target_format is not None else False
 
+        records: List[ConversionRecord] = []
         start = time.perf_counter()
         if trace_auto_convertible:
             if verbose:
@@ -96,14 +99,26 @@ class BaseMonitorTemplate(AutoConvertable):
             self.params[TRACE_TARGET_FORMAT] = trace_target_format
             if trace_conversion_distance == 0:
                 self.params[TRACE_KEY] = data_file
+                records.append(ConversionRecord(
+                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                    steps=[], as_seen_by_tool=data_file
+                ))
             else:
-                self.params[TRACE_KEY] = AutoTraceConverter(path_manager, trace_source_format, trace_target_format).convert(
+                self.params[TRACE_KEY], trace_steps = AutoTraceConverter(path_manager, trace_source_format, trace_target_format).convert(
                     input_file=data_file, output_file=data_file, params=self.params
                 )
+                records.append(ConversionRecord(
+                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                    steps=trace_steps, as_seen_by_tool=self.params[TRACE_KEY]
+                ))
         else:
             if verbose:
                 print("Costume Trace preprocessing for format {}".format(trace_source_format))
             self.preprocessing_data(path_to_folder, data_file, trace_source_format, path_manager)
+            records.append(ConversionRecord(
+                kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                steps=[], as_seen_by_tool=self.params.get(TRACE_KEY, data_file), custom=True
+            ))
 
         if policy_auto_convertible:
             if verbose:
@@ -113,16 +128,36 @@ class BaseMonitorTemplate(AutoConvertable):
 
             if policy_conversion_distance == 0:
                 self.params[POLICY_KEY] = policy_file
+                records.append(ConversionRecord(
+                    kind="policy", source_file=policy_file, source_format=policy_source_format.value,
+                    steps=[], as_seen_by_tool=policy_file
+                ))
             else:
-                self.params[POLICY_KEY] = AutoPolicyConverter(path_manager, policy_source_format, policy_target_format).convert(
+                self.params[POLICY_KEY], policy_steps = AutoPolicyConverter(path_manager, policy_source_format, policy_target_format).convert(
                     input_file=policy_file, output_file=policy_file, params=self.params
                 )
+                records.append(ConversionRecord(
+                    kind="policy", source_file=policy_file, source_format=policy_source_format.value,
+                    steps=policy_steps, as_seen_by_tool=self.params[POLICY_KEY]
+                ))
         else:
             if verbose:
                 print("Costume Policy preprocessing for format {}".format(policy_source_format))
             self.preprocessing_policy(path_to_folder, policy_file, signature_file, policy_source_format, path_manager)
+            records.append(ConversionRecord(
+                kind="policy", source_file=policy_file, source_format=policy_source_format.value,
+                steps=[], as_seen_by_tool=self.params.get(POLICY_KEY, policy_file), custom=True
+            ))
+
+        # the signature is always handed over untouched; the identity record
+        # pins its hash so the run's exact inputs are fully covered
+        if isinstance(signature_file, str) and signature_file:
+            records.append(ConversionRecord(
+                kind="signature", source_file=signature_file, source_format="sig",
+                steps=[], as_seen_by_tool=signature_file
+            ))
         end = time.perf_counter()
-        return end - start
+        return PreprocessingResult(elapsed_s=end - start, records=records)
 
     @abstractmethod
     def preprocessing_data(
@@ -144,20 +179,40 @@ def run_monitor_online(
         path_to_folder: AnyStr, data_file: AnyStr, signature_file: AnyStr, policy_file: AnyStr,
         path_manager: PathManager, trace_source_format: InputOutputTraceFormats,
         policy_source_format: InputOutputPolicyFormats, cli_args: CLIArgs,
-        online_experiment_contract: OnlineExperimentContractGeneral, script_name: Optional[str] = None
+        online_experiment_contract: OnlineExperimentContractGeneral, script_name: Optional[str] = None,
+        provenance: Optional[ProvenanceSession] = None
 ):
     print_headline(f"Run (Online) {mon.name}")
 
+    pre = None
     if script_name is not None:
         preprocessing_elapsed = 0
         data_source = script_name
         policy_file = Policy_File()  # todo where to scripts get policies from, probably hardcoded
         signature_file = Signature_File()
+        if provenance is not None:
+            # script runs have no conversion, but their input is still an
+            # input: record the script itself, or say loudly that we cannot
+            script_path = os.path.join(path_to_folder, script_name)
+            if os.path.isfile(script_path):
+                pre = PreprocessingResult(elapsed_s=0.0, records=[ConversionRecord(
+                    kind="trace", source_file=script_name, source_format="script",
+                    steps=[], as_seen_by_tool=script_name)])
+                provenance.capture(pre.records)
+            else:
+                print(f"provenance WARNING: script-mode run of {mon.name} has no "
+                      f"capturable input ({script_name} not found in the setting "
+                      f"folder); no provenance entry stored")
     else:
-        preprocessing_elapsed = mon.preprocessing(
+        pre = mon.preprocessing(
             path_to_folder, trace_source_format, policy_source_format,
             data_file, signature_file, policy_file, path_manager, verbose=cli_args.verbose
         )
+        preprocessing_elapsed = pre.elapsed_s
+        # store the exact final inputs BEFORE the tool runs: a crashed or
+        # timed-out run must still leave its provenance behind
+        if provenance is not None:
+            provenance.capture(pre.records)
 
         data_source = mon.params[TRACE_KEY]
         policy_file = mon.params[POLICY_KEY]
@@ -182,12 +237,16 @@ def run_monitor_online(
         raise ValueError(f"Monitor {mon.name} has no online experiment contract")
 
     tool_command, name = mon.construct_online_command()
+    if provenance is not None and pre is not None:
+        provenance.record_invocation(tool_command)
     output, total_elapsed_s, total_count, latency_err_msg, code = run_online_image(
         image_name=target_name, tool_command=tool_command,
         online_experiment_contract=online_experiment_contract,
         tool_online_experiment_contract=tool_online_experiment_contract,
         verbose=cli_args.verbose
     )
+    if provenance is not None and pre is not None:
+        provenance.verify_after_run(pre.records)
 
     print(f"Prep:        {preprocessing_elapsed}\nBuilding: {build_comp_elapsed}")
     print(f"Runtime:     {total_elapsed_s}\nTotal Count: {total_count}")
@@ -203,13 +262,19 @@ def run_monitor_online(
 
 def run_monitor_offline(mon: Union[OfflineRunnable, BaseMonitorTemplate], timeout_value, path_to_folder: AnyStr, data_file: AnyStr, signature_file: AnyStr, policy_file: AnyStr,
                         path_manager: PathManager, trace_source_format: InputOutputTraceFormats, policy_source_format: InputOutputPolicyFormats,
-                        result_file, cli_args: CLIArgs, oracle: Optional[AbstractOracleTemplate] = None) -> Tuple[float, float, float, float]:
+                        result_file, cli_args: CLIArgs, oracle: Optional[AbstractOracleTemplate] = None,
+                        provenance: Optional[ProvenanceSession] = None) -> Tuple[float, float, float, float]:
     print_headline(f"Run (Offline) {mon.name}")
 
-    preprocessing_elapsed = mon.preprocessing(
+    pre = mon.preprocessing(
         path_to_folder, trace_source_format, policy_source_format,
         data_file, signature_file, policy_file, path_manager, verbose=cli_args.verbose
     )
+    preprocessing_elapsed = pre.elapsed_s
+    # store the exact final inputs BEFORE compile and run: a crashed or
+    # timed-out run must still leave its provenance behind
+    if provenance is not None:
+        provenance.capture(pre.records)
 
     if mon.params.get(STRATIFIED):
         stratified_map = init_stratification_map(
@@ -224,10 +289,14 @@ def run_monitor_offline(mon: Union[OfflineRunnable, BaseMonitorTemplate], timeou
 
     start = time.perf_counter()
     cmd, name = mon.construct_offline_command()
+    if provenance is not None:
+        provenance.record_invocation(cmd)
     measure = False if mon.params.get(NOMEASURE) else True
     out, code = mon.image.run_offline(parameters=cmd, path_to_data=path_to_folder, time_out=timeout_value, name=name, measure=measure)
     end = time.perf_counter()
     run_offline_elapsed = end - start
+    if provenance is not None:
+        provenance.verify_after_run(pre.records)
 
     if code != 0:
         raise TimedOut(f"Timed out: {mon.name}") if code == 124 else ToolException(out)

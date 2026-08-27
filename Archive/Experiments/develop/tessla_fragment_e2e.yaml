@@ -1,0 +1,84 @@
+experiment_name: tessla_fragment_e2e
+
+# End-to-end smoke of the TeSSLa converter chain (phase 0). The generation
+# block is byte-equivalent to tool_comparison_synthetic_experiment_fragment
+# so the fingerprint matches the pre-generated benchmark copied into
+# experiments/tessla_fragment_e2e/ and generation is skipped (the generator
+# image repo at git.ku.dk is VPN-gated). TeSSLa receives MFOTL policies via
+# TeSSLaPolicyConverter and CSV traces via TeSSLaTraceConverter; verification
+# uses the stored VeriMon oracle results. Large sizes may hit the 60s time
+# guard for the interpreter; those rows are expected TimedOut entries.
+
+monitors:
+  - identifier: TeSSLa
+    name: TeSSLa
+    commit: b1964bd445286832bd2cb120ca7586858e941ceb
+  - identifier: TeSSLa
+    name: TeSSLa Rust
+    commit: b1964bd445286832bd2cb120ca7586858e941ceb
+    params:
+      backend: rust
+  - identifier: VeriMon
+    name: VeriMon
+    branch: master
+
+oracles:
+  - identifier: VeriMonOracle
+    name: VeriMonOracle
+    monitor_name: VeriMon
+
+oracle:
+  enabled: true
+  name: VeriMonOracle
+
+runtime_constraints:
+  upper_bound: 60
+
+data_setup:
+  type: SignatureContract
+  SignatureContract:
+    trace_length: 1000
+    event_rate: 1000
+
+policy_setup:
+  type: MfotlPolicyContract
+  MfotlPolicyContract:
+    num_preds: 4
+    prob_eand: 0
+    prob_rand: 0
+    prob_let: 0
+    prob_matchF: 0
+    prob_matchP: 0
+    prob_next: 0
+    prob_eventually: 0
+    prob_until: 0
+    ub: 0
+    unbounded: True
+
+synthetic_config:
+  data_source: SignatureGenerator
+  policy_source: MfotlPolicyGenerator
+  experiment:
+    num_operators: [5]
+    num_fvs: [2]
+    num_setting: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    num_data_set_sizes: [10, 50, 100, 500, 1000]
+
+experiment_type: Signature
+
+tools_to_build:
+  - TeSSLa
+  - TeSSLa Rust
+  - VeriMon
+
+seeds:
+  '[5, 2, 0]': [314159265,87006]
+  '[5, 2, 1]': [314159265,53339]
+  '[5, 2, 2]': [314159265,34134]
+  '[5, 2, 3]': [314159265,16519]
+  '[5, 2, 4]': [314159265,41414]
+  '[5, 2, 5]': [314159265,99113]
+  '[5, 2, 6]': [314159265,98765]
+  '[5, 2, 7]': [314159265,65359]
+  '[5, 2, 8]': [314159265,11320]
+  '[5, 2, 9]': [314159265,53326]

@@ -40,6 +40,7 @@ class CLI:
         self.path_manager.add_path(PATH_TO_INFRA, self.infra_folder)
 
         os.makedirs(self.result_base_folder, exist_ok=True)
+        os.makedirs(self.result_analysis_folder, exist_ok=True)
 
         os.makedirs(self.build_folder, exist_ok=True)
         os.makedirs(self.experiment_folder, exist_ok=True)
@@ -129,6 +130,15 @@ Examples:
         )
 
         parser.add_argument(
+            '--provenance',
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help='Store each tool\'s exact final inputs (converted trace/policy) plus a '
+                 'conversion manifest under results/<run>/provenance/ (default: on; '
+                 'disable with --no-provenance; --debug implies --provenance)'
+        )
+
+        parser.add_argument(
             '--clean',
             action='store_true',
             help='Only retain the lastest result of an experiment'
@@ -158,6 +168,7 @@ Examples:
             clean=args.clean,
             clean_all=args.clean_all,
             analyze=args.analyze,
+            provenance=(args.provenance or args.debug),  # --debug implies --provenance
         )
 
         config_name = args.config
@@ -231,12 +242,18 @@ Examples:
                 print(f"✓ Configuration validated successfully: {yaml_file}")
                 return None
 
+            # the results folder must exist BEFORE the run: provenance is
+            # written into it while the tools execute, not at save time
+            if result_folder is None:
+                result_folder = self._create_timestamped_result_folder(experiment_name)
+
             benchmark = BenchmarkBuilder(
                 experiment_name=experiment_name,
                 coordinator=coordinator,
                 tools_to_build=tools_to_build,
                 repeat_runs=num_repeats,
                 cli_args=cli_args,
+                result_folder=result_folder,
             )
 
             monitors = monitor_manager.get_monitors(tools_to_build)
@@ -245,6 +262,7 @@ Examples:
                 print(f"Running experiment with {len(monitors)} monitor(s)...")
 
             results = benchmark.run(monitors)
+            analysis_run_folder = None
             if getattr(cli_args, "analyze", False):
                 print(f"Running automated analysis on results...")
                 analysis_base = os.path.join(self.path_manager.get_path(PATH_TO_INFRA), "analysis_results")
@@ -263,19 +281,26 @@ Examples:
                 for analysis_name, analysis_df in analysis_results.items():
                     analysis_df.to_csv(os.path.join(analysis_run_folder, f"{analysis_name}.csv"), index=False)
 
+            # cleaning stays post-success (a failed run must not destroy
+            # earlier results) but must skip this run's own folders, which
+            # already hold results AND provenance
             if not is_suite:
+                keep = os.path.basename(result_folder)
+                keep_analysis = os.path.basename(analysis_run_folder) if analysis_run_folder else None
                 if cli_args.clean_all:
-                    self._clean_all()
-                elif cli_args.clean:
                     for folder in os.listdir(self.result_base_folder):
-                        if folder.startswith(experiment_name):
+                        if folder != keep:
                             shutil.rmtree(os.path.join(self.result_base_folder, folder), ignore_errors=True)
                     for folder in os.listdir(self.result_analysis_folder):
-                        if folder.startswith(experiment_name):
+                        if folder != keep_analysis:
                             shutil.rmtree(os.path.join(self.result_analysis_folder, folder), ignore_errors=True)
-
-            if result_folder is None:
-                result_folder = self._create_timestamped_result_folder(experiment_name)
+                elif cli_args.clean:
+                    for folder in os.listdir(self.result_base_folder):
+                        if folder.startswith(experiment_name) and folder != keep:
+                            shutil.rmtree(os.path.join(self.result_base_folder, folder), ignore_errors=True)
+                    for folder in os.listdir(self.result_analysis_folder):
+                        if folder.startswith(experiment_name) and folder != keep_analysis:
+                            shutil.rmtree(os.path.join(self.result_analysis_folder, folder), ignore_errors=True)
 
             results.to_csv(result_folder, experiment_name)
 

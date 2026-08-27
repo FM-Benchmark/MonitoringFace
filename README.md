@@ -125,6 +125,7 @@ python -m Infrastructure.main examples/example_synthetic_experiment.yaml --dry-r
 | `--dry-run` | Validate the configuration without building or running anything. |
 | `--verbose`, `-v` | Print detailed progress and the commands being executed. |
 | `--debug` | Preserve transient scratch data (converted traces/policies) for each tool execution. |
+| `--provenance` / `--no-provenance` | Store each tool's exact final inputs (converted trace/policy) plus a conversion manifest with hashes and converter commands under `results/<run>/provenance/` (default: on; `--debug` implies it). |
 | `--no-measure` | Disable the in-container `/usr/bin/time` measurement of time and memory. |
 | `--suite` | Force the config to be treated as an experiment suite (otherwise auto-detected). |
 | `--clean` | Keep only the latest result/analysis of this experiment. |
