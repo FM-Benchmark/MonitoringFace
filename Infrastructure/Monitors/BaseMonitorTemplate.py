@@ -287,11 +287,11 @@ def run_monitor_offline(mon: Union[OfflineRunnable, BaseMonitorTemplate], timeou
     end_compile = time.perf_counter()
     compile_elapsed = end_compile - start_compile
 
-    start = time.perf_counter()
     cmd, name = mon.construct_offline_command()
     if provenance is not None:
         provenance.record_invocation(cmd)
     measure = False if mon.params.get(NOMEASURE) else True
+    start = time.perf_counter()
     out, code = mon.image.run_offline(parameters=cmd, path_to_data=path_to_folder, time_out=timeout_value, name=name, measure=measure)
     end = time.perf_counter()
     run_offline_elapsed = end - start
