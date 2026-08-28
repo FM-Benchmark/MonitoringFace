@@ -1,3 +1,4 @@
+import re
 from typing import List, Tuple, Dict, Any
 
 from Infrastructure.AutoConversion.InputOutputPolicyFormats import InputOutputPolicyFormats
@@ -10,6 +11,15 @@ UNICODE_TO_STRING = [
     ("S", " SINCE "), ("U", " UNTIL "), ("●", " PREV "), ("○", " NEXT "), ("⧫", " ONCE "),
     ("◊", " EVENTUALLY "), ("■", " ALWAYS "), ("□", " HISTORICALLY ")
 ]
+
+
+def bounded_pattern(symbol: str) -> str:
+    pattern = re.escape(symbol)
+    if symbol[:1].isalnum() or symbol[:1] == "_":
+        pattern = r"\b" + pattern
+    if symbol[-1:].isalnum() or symbol[-1:] == "_":
+        pattern = pattern + r"\b"
+    return pattern
 
 
 class UnicodeMFOTLConverterException(Exception):
@@ -34,9 +44,9 @@ class UnicodeMFOTLConverter(PolicyConverterTemplate):
         if unicode_to_mfotl or mfotl_to_unicode:
             for unicode_symbol, string_symbol in UNICODE_TO_STRING:
                 if unicode_to_mfotl:
-                    src_policy = src_policy.replace(unicode_symbol, string_symbol)
+                    src_policy = re.sub(bounded_pattern(unicode_symbol), string_symbol, src_policy)
                 else:
-                    src_policy = src_policy.replace(string_symbol, unicode_symbol)
+                    src_policy = re.sub(bounded_pattern(string_symbol), unicode_symbol, src_policy)
             with open(f"{path_to_folder}/{output_file}", 'w') as f:
                 f.write(src_policy)
         else:
