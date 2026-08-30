@@ -35,7 +35,7 @@ def parse_wall_time(s: str) -> float | str:
 
     if s.endswith("s"):
         return float(s[:-1])
-    raise ValueError(f"Unknown time format: '{s}'")
+    return "N/A"
 
 
 def parse_memory(s: str) -> str:
