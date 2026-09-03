@@ -139,7 +139,9 @@ YAML configuration reference.
 When the CLI runs a workload, it proceeds through five stages:
 
 1. **Preprocessing** — convert generated or case-study inputs into each monitor's
-   accepted trace/policy formats, using Converters.
+   accepted trace/policy formats, using Converters. The policy is converted first,
+   so that a policy conversion can hand data to the trace conversion, e.g., as in
+   the MFOTL → QTL translation (see [DejaVu](#dejavu-and-the-policys-constants) below).
 2. **Compilation** — for *compiled* monitors (e.g. DejaVu), synthesize a binary from
    the policy. *Interpreted* monitors (e.g. MonPoly) skip this stage.
 3. **Execution** — run the monitor on the prepared inputs.
@@ -155,6 +157,21 @@ Standardized output formats (after post-processing) are:
 - **Verdicts** — a list of lists of assignments to the formula's free variables (MonPoly, VeriMon).
 - **OOOVerdicts** — like Verdicts, but the outer list may refer to time-points in any order (TimelyMon).
 - **PropositionTree** — a list of PDTs storing Boolean verdicts (WhyMon).
+
+#### DejaVu and the policy's constants
+
+DejaVu quantifies over the values it has *seen*, so a constant that occurs only in the
+policy — `x = 4` on a trace that never mentions 4 — is never in range, and the monitor
+silently reports too few verdicts. The MFOTL → QTL translator therefore writes the
+policy's constants to `<dom predicate>.dom` next to the translated policy, and the
+replayer prepends one registration event per constant to the trace's first time point
+(`-init`). DejaVu counts those events, so its reported event numbers are shifted by
+exactly that many, and the DejaVu wrapper subtracts them again during post-processing.
+
+Registration events need a trace format that admits more than one event per time point:
+`dejavu-encoded` (the default target) and `dejavu-linear` qualify, plain `dejavu` does
+not. A run whose policy has constants but whose trace is not converted at all is
+rejected rather than monitored against too small a domain.
 
 ### Experiment types
 

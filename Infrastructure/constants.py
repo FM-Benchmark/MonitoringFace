@@ -83,6 +83,11 @@ STRATIFIED_MAP = "stratified_map"
 TRACE_TARGET_FORMAT = "trace_target_format"
 
 
+POLICY_CONSTANTS_FILE = "policy_constants_file"      # basename, in the scratch folder
+POLICY_CONSTANTS_COUNT = "policy_constants_count"    # registration events prepended
+POLICY_CONSTANTS_APPLIED = "policy_constants_applied"  # set by the converter that prepended them
+
+
 
 
 PLACEHOLDER_EVENT = "Placeholder()"

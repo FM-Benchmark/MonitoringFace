@@ -63,6 +63,10 @@ directory. If the tool relies solely on automatic conversion, raise
 `NotImplementedError` (the concrete `preprocessing` method on the base class chooses
 between auto-conversion and these hooks).
 
+The base `preprocessing` converts the **policy before the trace**, and hands the same
+`params` dict to every converter in both chains, so a policy converter can pass data to
+the trace conversion through it. 
+
 ## Offline interface (`OfflineRunnable`)
 
 Implement these to support offline (whole-trace) monitoring:

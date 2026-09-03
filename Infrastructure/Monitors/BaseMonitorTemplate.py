@@ -22,7 +22,8 @@ from Infrastructure.Oracles.AbstractOracleTemplate import AbstractOracleTemplate
 from Infrastructure.Provenance.Provenance import ConversionRecord, PreprocessingResult, ProvenanceSession
 from Infrastructure.constants import SIGNATURE_KEY, FOLDER_KEY, TRACE_KEY, POLICY_KEY, PATH_TO_BUILD, PATH_TO_ARCHIVE, \
     PATH_TO_TRACE_INPUT, PATH_TO_TRACE_OUTPUT, PATH_TO_INTERMEDIATE_WORKSPACE, IMAGE_POSTFIX, Policy_File, \
-    Signature_File, NOMEASURE, STRATIFIED, STRATIFIED_MAP, TRACE_TARGET_FORMAT
+    Signature_File, NOMEASURE, POLICY_CONSTANTS_APPLIED, POLICY_CONSTANTS_COUNT, POLICY_CONSTANTS_FILE, \
+    STRATIFIED, STRATIFIED_MAP, TRACE_TARGET_FORMAT
 from Infrastructure.printing import print_headline, print_footline
 
 
@@ -84,42 +85,20 @@ class BaseMonitorTemplate(AutoConvertable):
         path_manager.add_path(PATH_TO_INTERMEDIATE_WORKSPACE, f"{path_to_folder}/scratch")
         path_manager.add_path(PATH_TO_TRACE_OUTPUT, f"{path_to_folder}/scratch")
 
+        # per-run derived state: params outlive a setting, and a run whose policy
+        # conversion extracts no constants must not inherit the previous policy's
+        for key in (POLICY_CONSTANTS_FILE, POLICY_CONSTANTS_COUNT, POLICY_CONSTANTS_APPLIED):
+            self.params.pop(key, None)
+
         trace_target_format, trace_conversion_distance = find_trace_path(self, path_manager, trace_source_format)
         policy_target_format, policy_conversion_distance = find_policy_path(self, path_manager, policy_source_format)
 
         trace_auto_convertible = True if trace_target_format is not None else False
         policy_auto_convertible = True if policy_target_format is not None else False
 
-        records: List[ConversionRecord] = []
         start = time.perf_counter()
-        if trace_auto_convertible:
-            if verbose:
-                print("Automatic Trace conversion from {} to {}".format(trace_source_format, trace_target_format))
-
-            self.params[TRACE_TARGET_FORMAT] = trace_target_format
-            if trace_conversion_distance == 0:
-                self.params[TRACE_KEY] = data_file
-                records.append(ConversionRecord(
-                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
-                    steps=[], as_seen_by_tool=data_file
-                ))
-            else:
-                self.params[TRACE_KEY], trace_steps = AutoTraceConverter(path_manager, trace_source_format, trace_target_format).convert(
-                    input_file=data_file, output_file=data_file, params=self.params
-                )
-                records.append(ConversionRecord(
-                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
-                    steps=trace_steps, as_seen_by_tool=self.params[TRACE_KEY]
-                ))
-        else:
-            if verbose:
-                print("Costume Trace preprocessing for format {}".format(trace_source_format))
-            self.preprocessing_data(path_to_folder, data_file, trace_source_format, path_manager)
-            records.append(ConversionRecord(
-                kind="trace", source_file=data_file, source_format=trace_source_format.value,
-                steps=[], as_seen_by_tool=self.params.get(TRACE_KEY, data_file), custom=True
-            ))
-
+        # The policy is converted BEFORE the trace: a policy conversion may extract
+        # data the trace conversion has to embed. 
         if policy_auto_convertible:
             if verbose:
                 print("Policy conversion from {} to {}".format(policy_source_format, policy_target_format))
@@ -128,27 +107,69 @@ class BaseMonitorTemplate(AutoConvertable):
 
             if policy_conversion_distance == 0:
                 self.params[POLICY_KEY] = policy_file
-                records.append(ConversionRecord(
+                policy_record = ConversionRecord(
                     kind="policy", source_file=policy_file, source_format=policy_source_format.value,
                     steps=[], as_seen_by_tool=policy_file
-                ))
+                )
             else:
                 self.params[POLICY_KEY], policy_steps = AutoPolicyConverter(path_manager, policy_source_format, policy_target_format).convert(
                     input_file=policy_file, output_file=policy_file, params=self.params
                 )
-                records.append(ConversionRecord(
+                policy_record = ConversionRecord(
                     kind="policy", source_file=policy_file, source_format=policy_source_format.value,
                     steps=policy_steps, as_seen_by_tool=self.params[POLICY_KEY]
-                ))
+                )
         else:
             if verbose:
                 print("Costume Policy preprocessing for format {}".format(policy_source_format))
             self.preprocessing_policy(path_to_folder, policy_file, signature_file, policy_source_format, path_manager)
-            records.append(ConversionRecord(
+            policy_record = ConversionRecord(
                 kind="policy", source_file=policy_file, source_format=policy_source_format.value,
                 steps=[], as_seen_by_tool=self.params.get(POLICY_KEY, policy_file), custom=True
-            ))
+            )
 
+        if trace_auto_convertible:
+            if verbose:
+                print("Automatic Trace conversion from {} to {}".format(trace_source_format, trace_target_format))
+
+            self.params[TRACE_TARGET_FORMAT] = trace_target_format
+            if trace_conversion_distance == 0:
+                self.params[TRACE_KEY] = data_file
+                trace_record = ConversionRecord(
+                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                    steps=[], as_seen_by_tool=data_file
+                )
+            else:
+                self.params[TRACE_KEY], trace_steps = AutoTraceConverter(path_manager, trace_source_format, trace_target_format).convert(
+                    input_file=data_file, output_file=data_file, params=self.params
+                )
+                trace_record = ConversionRecord(
+                    kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                    steps=trace_steps, as_seen_by_tool=self.params[TRACE_KEY]
+                )
+        else:
+            if verbose:
+                print("Costume Trace preprocessing for format {}".format(trace_source_format))
+            self.preprocessing_data(path_to_folder, data_file, trace_source_format, path_manager)
+            trace_record = ConversionRecord(
+                kind="trace", source_file=data_file, source_format=trace_source_format.value,
+                steps=[], as_seen_by_tool=self.params.get(TRACE_KEY, data_file), custom=True
+            )
+
+        # Constants the policy conversion extracted but not added to the trace:
+        # refuse the run rather than record a wrong verdict.
+        if self.params.get(POLICY_CONSTANTS_FILE) and not self.params.get(POLICY_CONSTANTS_APPLIED):
+            raise ToolException(
+                f"{self.name}: the policy conversion extracted the policy's constants to "
+                f"{self.params[POLICY_CONSTANTS_FILE]}, but they never entered the trace — "
+                f"the conversion from {trace_source_format.value} to "
+                f"{trace_target_format.value if trace_target_format else 'the tool format'} "
+                f"either did not run ({self.name} already accepts the source format) or "
+                f"cannot register constants; supply the trace in a format that is converted "
+                f"by a converter that can, or a policy without constants"
+            )
+
+        records: List[ConversionRecord] = [trace_record, policy_record]
         # the signature is always handed over untouched; the identity record
         # pins its hash so the run's exact inputs are fully covered
         if isinstance(signature_file, str) and signature_file:

@@ -10,7 +10,7 @@ from Infrastructure.DataTypes.Verification.OutputStructures.AbstractOutputStrucu
 from Infrastructure.DataTypes.Verification.OutputStructures.Structures.PropositionList import PropositionList
 from Infrastructure.DataTypes.Verification.OutputStructures.SubTypes.VariableOrder import DefaultVariableOrder
 from Infrastructure.Monitors.BaseMonitorTemplate import BaseMonitorTemplate, OfflineRunnable
-from Infrastructure.constants import POLICY_KEY, FOLDER_KEY, TRACE_KEY, STRATIFIED_MAP
+from Infrastructure.constants import POLICY_CONSTANTS_COUNT, POLICY_KEY, FOLDER_KEY, TRACE_KEY, STRATIFIED_MAP
 
 
 class DejaVu(BaseMonitorTemplate, OfflineRunnable):
@@ -41,6 +41,10 @@ class DejaVu(BaseMonitorTemplate, OfflineRunnable):
     def post_processing_offline(self, stdout_input: AnyStr) -> AbstractOutputStructure:
         BASE = 1
         stratindex = self.params.get(STRATIFIED_MAP)
+        # The policy's constants were added as extra events at the head
+        # of the trace (see QTLConverter/ReplayerConverter). DejaVu counts them, so its
+        # event numbers are shifted by exactly that many.
+        registered = int(self.params.get(POLICY_CONSTANTS_COUNT) or 0)
         prop_list = PropositionList(DefaultVariableOrder())
         if stdout_input == "":
             return prop_list
@@ -49,7 +53,11 @@ class DejaVu(BaseMonitorTemplate, OfflineRunnable):
         for line in filter(lambda l: "violated on event number" in l, lines.split("\n")):
             num_str = line.split("number")[1].strip().rstrip(":")
             try:
-                number = int(num_str)
+                number = int(num_str) - registered
+                if number < BASE:
+                    # a registration event: the policy holds only at the boundary
+                    # events of the trace proper, so this cannot be a real verdict
+                    continue
                 if stratindex is not None:
                     try:
                         orig_tp, _ = stratindex.original(number-BASE)

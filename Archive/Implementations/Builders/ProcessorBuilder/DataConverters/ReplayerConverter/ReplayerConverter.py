@@ -5,6 +5,11 @@ from Infrastructure.Builders.ProcessorBuilder.DataConverters.DataConverterTempla
 from Infrastructure.Builders.ProcessorBuilder.ImageManager import Processor, ImageManager
 from Infrastructure.AutoConversion.InputOutputTraceFormats import InputOutputTraceFormats, trace_inout_format_to_str
 from Infrastructure.Monitors.MonitorExceptions import ReplayerException
+from Infrastructure.constants import POLICY_CONSTANTS_APPLIED, POLICY_CONSTANTS_FILE
+
+# The trace itself arrives on stdin, so the container has no mount of its own; the
+# constants file the policy conversion left in the scratch folder needs one.
+INIT_MOUNT = "/init"
 
 
 class ReplayerConverter(DataConverterTemplate):
@@ -19,9 +24,23 @@ class ReplayerConverter(DataConverterTemplate):
         cmd_params = params["cmd_params"] if "cmd_params" in params else ["-a", "0"]
         cast_source = trace_inout_format_to_str(source)
         cast_target = trace_inout_format_to_str(target)
-        command = ["docker", "run", "--rm", "--entrypoint", "java", "-i",
+
+        constants_file = None if params.get(POLICY_CONSTANTS_APPLIED) else params.get(POLICY_CONSTANTS_FILE)
+        mount, init = [], []
+        if constants_file:
+            if target == InputOutputTraceFormats.DEJAVU:
+                raise ReplayerException(
+                    f"cannot register the policy's constants ({constants_file}) in a "
+                    f"{cast_target} trace: the format admits a single event per time point "
+                    f"and the trace's first one is already taken; convert to "
+                    f"dejavu-encoded or dejavu-linear instead"
+                )
+            mount = ["-v", f"{path_to_folder}:{INIT_MOUNT}:ro"]
+            init = ["-init", f"{INIT_MOUNT}/{constants_file}"]
+
+        command = ["docker", "run", "--rm", "--entrypoint", "java", "-i"] + mount + [
                    f"{self.image.image_name.lower()}", "-cp", "classes:libs/*",
-                   "org.entry.Dispatcher", "Replayer", "-i", f"{cast_source}", "-f", f"{cast_target}"] + cmd_params
+                   "org.entry.Dispatcher", "Replayer", "-i", f"{cast_source}", "-f", f"{cast_target}"] + init + cmd_params
 
         with open(f"{path_to_folder}/{input_file}", 'r') as input_file:
             result = subprocess.run(command, stdin=input_file, capture_output=True, text=True)
@@ -32,6 +51,8 @@ class ReplayerConverter(DataConverterTemplate):
             else:
                 print(f"Error: {result.stderr}")
                 raise ReplayerException(f"Replayer Failed {result.stderr}")
+        if constants_file:
+            params[POLICY_CONSTANTS_APPLIED] = True
         return command  # exact argv, recorded in the provenance manifest
 
     def convert(
