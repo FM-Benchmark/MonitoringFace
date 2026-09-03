@@ -111,23 +111,11 @@ def time_point_pdt_pdt_check(oracle: AbstractOutputStructure, other: AbstractOut
     return True, "Verified"
 
 
-def verdicts_to_proposition_tree(verdicts: Verdicts, new_order: VariableOrdering):
-    pdt = PropositionTree(new_order)
-    return to_tree_inner(verdicts.verdict, pdt)
-
-
-def ooo_verdicts_to_proposition_tree(ooo_verdicts: OooVerdicts, new_order: VariableOrdering):
+def verdicts_to_proposition_tree(verdicts: Union[Verdicts, OooVerdicts], new_order: VariableOrdering):
     values = []
-    for tp in sorted(ooo_verdicts.tp_to_ts.keys()):
-        values.append([
-            ooo_verdicts.tp_to_ts[tp],
-            tp,
-            # Entries are stored as (time_stamp, time_point, values); match on
-            # the TIMEPOINT (second element).  The old destructuring matched
-            # against the timestamp slot, which only worked on ts == tp traces
-            # (same bug family as the fixed Verdicts.retrieve).
-            [val for (_val_ts, val_tp, vals) in ooo_verdicts.ooo_verdict if tp == val_tp for val in vals]
-        ])
+    for tp in sorted(verdicts.time_points().keys()):
+        ts, _, vals = verdicts.retrieve(tp)
+        values.append([ts, tp, vals])
 
     pdt = PropositionTree(new_order)
     return to_tree_inner(values, pdt)

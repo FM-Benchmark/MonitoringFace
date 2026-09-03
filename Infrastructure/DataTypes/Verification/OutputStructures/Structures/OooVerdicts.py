@@ -1,4 +1,4 @@
-from typing import Tuple, Dict
+from typing import Dict, List, Optional, Tuple
 
 from Infrastructure.DataTypes.Verification.OutputStructures.AbstractOutputStrucutre import AbstractOutputStructure
 from Infrastructure.DataTypes.Verification.OutputStructures.SubTypes.Assignment import Assignment
@@ -9,9 +9,13 @@ from Infrastructure.DataTypes.Verification.OutputStructures.SubTypes.VariableOrd
 
 class OooVerdicts(AbstractOutputStructure):
     def __init__(self, variable_order: VariableOrdering):
-        self.ooo_verdict: list[Tuple[int, int, list[ValueType]]] = list()
+        # tp -> [(arrival_idx, time_stamp, values), ...] in arrival order
+        self.by_tp: Dict[int, List[Tuple[int, Optional[int], List[ValueType]]]] = dict()
         self.tp_to_ts = dict()
         self.variable_order = variable_order
+        self.out_of_order_inserts = 0
+        self._arrival_counter = 0
+        self._max_tp_seen: Optional[int] = None
 
     def retrieve_order(self):
         return self.variable_order.retrieve_order()
@@ -26,7 +30,7 @@ class OooVerdicts(AbstractOutputStructure):
     def retrieve(self, time_point):
         if time_point not in self.tp_to_ts:
             return None
-        selected = [x for (_, tp, val) in self.ooo_verdict if tp == time_point for x in val]
+        selected = [x for (_, _, vals) in self.by_tp.get(time_point, []) for x in vals]
         return self.tp_to_ts[time_point], time_point, selected
 
     def insert(self, value, time_point, time_stamp):
@@ -36,4 +40,17 @@ class OooVerdicts(AbstractOutputStructure):
             values = list(map(lambda va: Assignment(va, self.variable_order), values))
         else:
             values = list(map(lambda va: Proposition(va), values))
-        self.ooo_verdict.append((time_stamp, time_point, values))
+        if self._max_tp_seen is not None and time_point < self._max_tp_seen:
+            self.out_of_order_inserts += 1
+        else:
+            self._max_tp_seen = time_point
+        self.by_tp.setdefault(time_point, []).append((self._arrival_counter, time_stamp, values))
+        self._arrival_counter += 1
+
+    def entry_count(self) -> int:
+        return self._arrival_counter
+
+    def in_arrival_order(self) -> List[Tuple[Optional[int], int, List[ValueType]]]:
+        entries = [(idx, ts, tp, vals) for tp, chunks in self.by_tp.items() for (idx, ts, vals) in chunks]
+        entries.sort(key=lambda entry: entry[0])
+        return [(ts, tp, vals) for (_, ts, tp, vals) in entries]

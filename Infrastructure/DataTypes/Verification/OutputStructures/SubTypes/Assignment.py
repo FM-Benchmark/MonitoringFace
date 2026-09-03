@@ -8,6 +8,7 @@ class Assignment(ValueType):
     def __init__(self, values: List[Any], variable_order: VariableOrdering):
         self.order = variable_order.retrieve_order()
         self.values = values
+        self._canonical = tuple(sorted(zip(self.order, self.values)))
 
     def __repr__(self):
         return f"Assignment({self.values}, {self.order})"
@@ -15,30 +16,30 @@ class Assignment(ValueType):
     def __eq__(self, other):
         if not isinstance(other, Assignment):
             return False
-        return dict(zip(self.order, self.values)) == dict(zip(other.order, other.values))
+        return self._canonical == other._canonical
 
     def __hash__(self) -> int:
-        return hash(tuple(zip(self.order, self.values)))
+        return hash(self._canonical)
 
     def __lt__(self, other):
         if not isinstance(other, Assignment):
             return NotImplemented
-        return tuple(sorted(zip(self.order, self.values))) < tuple(sorted(zip(other.order, other.values)))
+        return self._canonical < other._canonical
 
     def __le__(self, other):
         if not isinstance(other, Assignment):
             return NotImplemented
-        return tuple(sorted(zip(self.order, self.values))) <= tuple(sorted(zip(other.order, other.values)))
+        return self._canonical <= other._canonical
 
     def __gt__(self, other):
         if not isinstance(other, Assignment):
             return NotImplemented
-        return tuple(sorted(zip(self.order, self.values))) > tuple(sorted(zip(other.order, other.values)))
+        return self._canonical > other._canonical
 
     def __ge__(self, other):
         if not isinstance(other, Assignment):
             return NotImplemented
-        return tuple(sorted(zip(self.order, self.values))) >= tuple(sorted(zip(other.order, other.values)))
+        return self._canonical >= other._canonical
 
     def to_representation(self) -> List[Tuple[Any, AnyStr]]:
         return list(zip(self.values, self.order))

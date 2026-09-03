@@ -24,8 +24,8 @@ def as_oracle(verdict: Verdicts, other: AbstractOutputStructure) -> Tuple[bool, 
 
 
 def verdicts_to_verdicts_comp(oracle: Verdicts, other: Verdicts) -> Tuple[bool, str]:
-    oracle_len = len(oracle.verdict)
-    other_len = len(other.verdict)
+    oracle_len = oracle.entry_count()
+    other_len = other.entry_count()
     if oracle_len != other_len:
         return False, f"Verdict lengths differ! Oracle length: {oracle_len}, Tool length: {other_len}"
     return verdicts_to_verdicts_inner(oracle, other)

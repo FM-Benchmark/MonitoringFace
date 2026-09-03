@@ -1,6 +1,6 @@
 from typing import Tuple
 
-from Infrastructure.DataTypes.Verification.OutputStructures.AbstractComparator import time_point_pdt_check, ooo_verdicts_to_proposition_tree, verdicts_to_prop_list_inner, \
+from Infrastructure.DataTypes.Verification.OutputStructures.AbstractComparator import time_point_pdt_check, verdicts_to_proposition_tree, verdicts_to_prop_list_inner, \
     verdicts_to_verdicts_inner
 from Infrastructure.DataTypes.Verification.OutputStructures.AbstractOutputStrucutre import AbstractOutputStructure
 from Infrastructure.DataTypes.Verification.OutputStructures.PDTHelper import equality_between_pdts
@@ -39,7 +39,7 @@ def ooo_verdicts_to_proposition_tree_comp(oracle: OooVerdicts, other: Propositio
     (verdict, txt) = time_point_pdt_check(oracle, other)
     if not verdict: return False, txt
 
-    oracle_pdt = ooo_verdicts_to_proposition_tree(oracle, other.variable_order)
+    oracle_pdt = verdicts_to_proposition_tree(oracle, other.variable_order)
     for tp in oracle.time_points():
         if not equality_between_pdts(oracle_pdt.retrieve_order(), oracle_pdt.forest[tp], other.forest[tp]):
             return False, "Verified: Structures are not equivalent"
